@@ -1,25 +1,26 @@
-let activeLoversSpaceCharId = null; // 用于追踪当前情侣空间的角色ID
-let activeLoveLetter = null; // 用于暂存正在查看或回复的情书
-let activeQuestionId = null; // 用于暂存正在回答的问题ID
-let currentDiaryDate = null; // 用于暂存正在编辑或查看的日记日期
-let tempUploadedPhotos = []; // 暂存待上传的照片
-let lsActivityTimer = null;
-// ▼▼▼ 【全新】这是情侣空间专属音乐播放器的状态管理器 ▼▼▼
+let activeLoversSpaceCharId = null; // 当前情侣空间对应的角色ID
+let activeLoveLetter = null; // 当前查看或回复的情书对象
+let activeQuestionId = null; // 当前正在回答的问题ID
+let currentDiaryDate = null; // 当前编辑或查看的日记日期
+let tempUploadedPhotos = []; // 暂存待上传的照片数据
+let lsActivityTimer = null; // 今日足迹定时器ID
+
+// 情侣空间音乐播放器状态管理器
 let lsMusicState = {
   playlist: [], // 播放列表
-  currentIndex: -1, // 当前播放歌曲的索引
+  currentIndex: -1, // 当前播放歌曲索引
   isPlaying: false, // 是否正在播放
 };
+
+// 番茄钟状态管理器
 let pomodoroState = {
   isActive: false, // 专注是否正在进行
-  timerId: null, // 倒计时计时器
-  periodicTalkTimerId: null, // 角色定时说话的计时器
-  currentSession: null, // 当前专注会话的数据
+  timerId: null, // 倒计时计时器ID
+  periodicTalkTimerId: null, // 角色定时说话计时器ID
+  currentSession: null, // 当前专注会话数据
 };
-// ▼▼▼ 用下面这一整块代码，替换掉你旧的 open... 和 render... 四个函数 ▼▼▼
-// ▼▼▼ 【全新】BGM 搜索功能核心代码 ▼▼▼
 
-// 一个简单的网络请求函数
+// 网络请求工具函数
 if (typeof Http_Get_External === 'undefined') {
   window.Http_Get_External = function (url) {
     return new Promise(resolve => {
@@ -30,11 +31,21 @@ if (typeof Http_Get_External === 'undefined') {
     });
   };
 }
+
+/**
+ * 发起HTTP GET请求
+ * @param {string} url - 请求地址
+ * @returns {Promise} 请求结果
+ */
 async function Http_Get(url) {
   return await Http_Get_External(url);
 }
 
-// 检查音频链接是否真的可以播放
+/**
+ * 检查音频链接是否可以播放
+ * @param {string} url - 音频链接
+ * @returns {Promise<boolean>} 是否可以播放
+ */
 function checkAudioAvailability(url) {
   return new Promise(resolve => {
     const tester = new Audio();
@@ -43,8 +54,12 @@ function checkAudioAvailability(url) {
     tester.src = url;
   });
 }
+
 /**
- * 【辅助】获取网络歌曲的歌词
+ * 获取网络歌曲歌词
+ * @param {string} songId - 歌曲ID
+ * @param {string} source - 音乐平台来源(netease/tencent)
+ * @returns {Promise<string>} 歌词内容
  */
 async function getLyricsForSong(songId, source) {
   const url =
@@ -60,6 +75,12 @@ async function getLyricsForSong(songId, source) {
   }
   return '';
 }
+
+/**
+ * 解析LRC歌词格式
+ * @param {string} lrcContent - LRC歌词内容
+ * @returns {Array} 解析后的歌词数组[{time, text}]
+ */
 function parseLRC(lrcContent) {
   if (!lrcContent) return [];
   const lines = lrcContent.split('\n');
@@ -81,6 +102,12 @@ function parseLRC(lrcContent) {
   }
   return lyrics.sort((a, b) => a.time - b.time);
 }
+
+/**
+ * 格式化音乐时间显示
+ * @param {number} seconds - 秒数
+ * @returns {string} 格式化后的时间(mm:ss)
+ */
 function formatMusicTime(seconds) {
   if (isNaN(seconds) || seconds < 0) return '0:00';
   const minutes = Math.floor(seconds / 60);
@@ -88,6 +115,9 @@ function formatMusicTime(seconds) {
   return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+/**
+ * 更新音乐播放进度条
+ */
 function updateMusicProgressBar() {
   const currentTimeEl = document.getElementById('music-current-time');
   const totalTimeEl = document.getElementById('music-total-time');
@@ -105,9 +135,11 @@ function updateMusicProgressBar() {
   updateActiveLyric(audioPlayer.currentTime);
 }
 
-// ▼▼▼ 【V9.0 | 终极纯净版 - 移除代理】请用这块代码，完整替换旧的 searchNeteaseMusic 函数 ▼▼▼
 /**
- * 移除所有代理，直接请求你找到的 vkeys.cn API
+ * 搜索网易云音乐歌曲
+ * @param {string} name - 歌曲名
+ * @param {string} singer - 歌手名
+ * @returns {Promise<Array>} 搜索结果数组
  */
 async function searchNeteaseMusic(name, singer) {
   try {
@@ -116,10 +148,7 @@ async function searchNeteaseMusic(name, singer) {
       searchTerm += ` ${singer.replace(/\s/g, '')}`;
     }
 
-    // 【核心修改】我们不再需要任何代理，直接把目标API作为最终请求地址！
     const apiUrl = `https://api.vkeys.cn/v2/music/netease?word=${encodeURIComponent(searchTerm)}`;
-
-    console.log('正在尝试直接请求:', apiUrl); // 添加一条日志，方便我们调试
 
     const response = await fetch(apiUrl);
 
@@ -144,7 +173,6 @@ async function searchNeteaseMusic(name, singer) {
       }))
       .slice(0, 15);
   } catch (e) {
-    // 如果这次还失败，请把浏览器F12控制台里的红色错误信息完整地截图给我
     console.error('【vkeys API 直连】搜索失败:', e);
     await showCustomAlert(
       '网易云接口直连失败',
@@ -153,10 +181,11 @@ async function searchNeteaseMusic(name, singer) {
     return [];
   }
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
- * 从QQ音乐搜索歌曲列表
+ * 搜索QQ音乐歌曲
+ * @param {string} name - 歌曲名
+ * @returns {Promise<Array>} 搜索结果数组
  */
 async function searchTencentMusic(name) {
   try {
@@ -169,28 +198,26 @@ async function searchTencentMusic(name) {
         artist: song.singer,
         id: song.id,
         cover: song.cover || 'https://i.postimg.cc/pT2xKzPz/album-cover-placeholder.png',
-        source: 'tencent', // 标记来源
+        source: 'tencent',
       }))
-      .slice(0, 5); // 只取前5条结果
+      .slice(0, 5);
   } catch (e) {
     console.error('QQ音乐搜索API失败:', e);
     return [];
   }
 }
+
 /**
- * 【全新添加】显示一个包含多个选项的操作菜单模态框
- * 这是让图片编辑时能够选择“本地上传”或“URL”的关键函数！
- * @param {string} title - 模态框的标题
- * @param {Array<object>} options - 按钮选项数组, e.g., [{ text: '按钮文字', value: '返回值' }]
- * @returns {Promise<string|null>} - 返回用户点击按钮的value，如果取消则返回null
+ * 显示选择操作模态框
+ * @param {string} title - 模态框标题
+ * @param {Array} options - 选项数组[{text, value}]
+ * @returns {Promise<string|null>} 用户选择的值或null
  */
 function showChoiceModal(title, options) {
   return new Promise(resolve => {
-    // 复用你现有的自定义模态框
     const modal = document.getElementById('preset-actions-modal');
     const footer = modal.querySelector('.custom-modal-footer');
 
-    // 清空旧按钮并动态创建新按钮
     footer.innerHTML = '';
 
     options.forEach(option => {
@@ -198,12 +225,11 @@ function showChoiceModal(title, options) {
       button.textContent = option.text;
       button.onclick = () => {
         modal.classList.remove('visible');
-        resolve(option.value); // 返回被点击按钮的值
+        resolve(option.value);
       };
       footer.appendChild(button);
     });
 
-    // 添加一个标准的取消按钮
     const cancelButton = document.createElement('button');
     cancelButton.textContent = '取消';
     cancelButton.style.marginTop = '8px';
@@ -211,15 +237,16 @@ function showChoiceModal(title, options) {
     cancelButton.style.backgroundColor = '#f0f0f0';
     cancelButton.onclick = () => {
       modal.classList.remove('visible');
-      resolve(null); // 用户取消，返回 null
+      resolve(null);
     };
     footer.appendChild(cancelButton);
 
     modal.classList.add('visible');
   });
 }
+
 /**
- * 【总入口】当用户点击主屏幕的“情侣空间”App时触发
+ * 打开情侣空间入口 - 根据角色数量决定直接进入或选择角色
  */
 async function openLoversSpaceEntry() {
   const singleChats = Object.values(state.chats).filter(chat => !chat.isGroup);
@@ -234,9 +261,8 @@ async function openLoversSpaceEntry() {
   }
 }
 
-// ▼▼▼ 用这块代码替换 ▼▼▼
 /**
- * 打开用于情侣空间的角色选择弹窗 (已更新，会显示开启状态)
+ * 打开情侣空间角色选择器 - 显示角色列表及情侣空间开通状态
  */
 async function openCharSelectorForLoversSpace() {
   const modal = document.getElementById('ls-char-selector-modal');
@@ -246,11 +272,10 @@ async function openCharSelectorForLoversSpace() {
 
   singleChats.forEach(chat => {
     const item = document.createElement('div');
-    item.className = 'chat-list-item'; // 复用现有样式
+    item.className = 'chat-list-item';
     item.style.borderBottom = '1px solid var(--border-color)';
     item.dataset.chatId = chat.id;
 
-    // 【核心修改】检查角色是否已开通情侣空间
     const isLoversSpaceActive = !!chat.loversSpaceData;
     const statusText = isLoversSpaceActive
       ? '<span style="color: green; font-weight: bold;">已开通</span>'
@@ -268,17 +293,16 @@ async function openCharSelectorForLoversSpace() {
 
   modal.classList.add('visible');
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
- * 【核心】打开指定角色的情侣空间
+ * 打开指定角色的情侣空间
+ * @param {string} charId - 角色ID
  */
 async function openLoversSpace(charId) {
   activeLoversSpaceCharId = charId;
   const chat = state.chats[charId];
   if (!chat) return;
 
-  // 如果这个角色还没有情侣空间数据，就为他初始化一个
   if (!chat.loversSpaceData) {
     chat.loversSpaceData = {
       background: 'https://i.postimg.cc/k495F4W5/profile-banner.jpg',
@@ -289,10 +313,9 @@ async function openLoversSpace(charId) {
       loveLetters: [],
       shares: [],
       questions: [],
-      emotionDiaries: {}, // <--- 就是在这里新增了这一行！
+      emotionDiaries: {},
       dailyActivity: {},
     };
-    // ▲▲▲ 替换结束 ▲▲▲
     await db.chats.put(chat);
   }
 
@@ -301,7 +324,8 @@ async function openLoversSpace(charId) {
 }
 
 /**
- * 【全新】计算并更新“在一起”的天数
+ * 更新情侣空间在一起天数显示
+ * @param {object} chat - 聊天对象
  */
 function updateLoversSpaceDaysCounter(chat) {
   const counterEl = document.getElementById('ls-days-counter');
@@ -310,44 +334,36 @@ function updateLoversSpaceDaysCounter(chat) {
   if (startDateString) {
     const startDate = new Date(startDateString);
     const today = new Date();
-    // 修正时区问题，只比较日期
     startDate.setHours(0, 0, 0, 0);
     today.setHours(0, 0, 0, 0);
 
     const diffTime = Math.abs(today - startDate);
-    // 加1，因为第一天也算一天
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
     counterEl.textContent = `我们已经在一起 ${diffDays} 天了`;
   } else {
-    counterEl.innerHTML = `<a>点击右上角“设置”来记录第一天吧</a>`;
+    counterEl.innerHTML = `<a>点击右上角"设置"来记录第一天吧</a>`;
   }
 }
 
 /**
- * 【渲染引擎 - 已更新】根据角色数据，渲染整个情侣空间界面
+ * 渲染情侣空间界面
+ * @param {object} chat - 聊天对象
  */
 async function renderLoversSpace(chat) {
-  // 渲染头部
   document.getElementById('lovers-space-screen').style.backgroundImage = `url(${chat.loversSpaceData.background})`;
 
-  // 这是你想要的 user & char 标题
   const userNickname = state.qzoneSettings.nickname || '{{user}}';
   document.getElementById('ls-char-name').textContent = `${userNickname} & ${chat.name}`;
 
   document.getElementById('ls-user-avatar').src = chat.settings.myAvatar || defaultAvatar;
   document.getElementById('ls-char-avatar').src = chat.settings.aiAvatar || defaultAvatar;
 
-  // 调用新函数来更新天数
   updateLoversSpaceDaysCounter(chat);
 
-  // 默认显示第一个页签
   switchLoversSpaceTab('ls-moments-view');
-  // ▼▼▼ 用下面这块【已修复】的代码替换 ▼▼▼
-  // 这是你的旧代码
   document.querySelector('.ls-tab-item.active').classList.remove('active');
   document.querySelector('.ls-tab-item[data-view="ls-moments-view"]').classList.add('active');
 
-  // 渲染各个页签的内容
   renderLSMoments(chat.loversSpaceData.moments, chat);
   renderLSPhotos(chat.loversSpaceData.photos, chat);
   renderLSLetters(chat.loversSpaceData.loveLetters, chat);
@@ -355,24 +371,20 @@ async function renderLoversSpace(chat) {
   document.getElementById('ls-shares-list').innerHTML = '<p class="ls-empty-placeholder">Ta还没有分享任何内容~</p>';
 }
 
-// ▲▲▲ 替换到这里结束 ▲▲▲
-
 /**
- * 【V2 - 已集成今日足迹】切换情侣空间的页签
+ * 切换情侣空间页签
+ * @param {string} viewId - 视图ID
  */
 function switchLoversSpaceTab(viewId) {
-  // 1. 清理旧的定时器，防止内存泄漏
   if (lsActivityTimer) {
     clearInterval(lsActivityTimer);
     lsActivityTimer = null;
   }
 
-  // 2. 切换视图显示 (这部分逻辑不变)
   document.querySelectorAll('.ls-view').forEach(v => (v.style.display = 'none'));
   const targetView = document.getElementById(viewId);
   if (targetView) targetView.style.display = 'block';
 
-  // 3. 切换浮动按钮的显示 (这部分逻辑不变)
   const fabMoment = document.getElementById('ls-add-moment-btn');
   const fabAlbum = document.getElementById('ls-add-album-btn');
   const fabLetter = document.getElementById('ls-add-letter-btn');
@@ -386,43 +398,35 @@ function switchLoversSpaceTab(viewId) {
   else if (viewId === 'ls-letters-view' && fabLetter) fabLetter.style.display = 'block';
   else if (viewId === 'ls-questions-view' && fabQuestion) fabQuestion.style.display = 'block';
 
-  // 4. 【核心新增】如果切换到了“今日足迹”页，就调用它的专属渲染函数
   if (viewId === 'ls-activity-view') {
     const chat = state.chats[activeLoversSpaceCharId];
     renderLSDailyActivity(chat);
   }
 }
-/* =================================================================== */
-/* === 【全新】情侣空间 - 今日足迹功能核心函数 === */
-/* =================================================================== */
-
-// ▼▼▼ 用下面这一整块代码，替换掉你旧的 renderLSDailyActivity 函数 ▼▼▼
 
 /**
- * 【入口函数-已重构】当“今日足迹”页签被点击时，默认显示当天的足迹
- * @param {object} chat - 当前角色的聊天对象
+ * 渲染今日足迹页面 - 默认显示当天
+ * @param {object} chat - 聊天对象
  */
 function renderLSDailyActivity(chat) {
-  // 每次切换到这个页签，都重置为查看“今天”
   currentActivityDate = new Date();
   renderLSDailyActivityForDate(chat, currentActivityDate);
 }
 
 /**
- * 【核心渲染函数-全新】根据指定的日期，渲染“每日足迹”界面
- * @param {object} chat - 当前角色的聊天对象
- * @param {Date} date - 要查看的日期对象
+ * 根据指定日期渲染每日足迹界面
+ * @param {object} chat - 聊天对象
+ * @param {Date} date - 指定日期
  */
 function renderLSDailyActivityForDate(chat, date) {
   const viewEl = document.getElementById('ls-activity-view');
-  viewEl.innerHTML = ''; // 每次渲染都清空
+  viewEl.innerHTML = '';
 
   if (!chat || !chat.loversSpaceData) {
     viewEl.innerHTML = '<p class="ls-empty-placeholder">数据错误，无法加载足迹。</p>';
     return;
   }
 
-  // --- 1. 创建全新的顶部栏，包含日期和可爱的日历图标 ---
   const header = document.createElement('div');
   header.className = 'ls-activity-header';
   const dateStr = date.toISOString().split('T')[0];
@@ -447,16 +451,15 @@ function renderLSDailyActivityForDate(chat, date) {
         <path d="M8.29431 13.7H8.30331" stroke="#ff8fab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
         <path d="M8.29431 16.7H8.30331" stroke="#ff8fab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
-  `;
+    `;
 
   header.innerHTML = `
     <span class="ls-activity-date-display">${dateDisplay}</span>
     ${calendarIconSvg}
-  `;
+    `;
   viewEl.appendChild(header);
   header.querySelector('#ls-activity-calendar-icon').onclick = openActivityCalendar;
 
-  // --- 2. 根据日期显示对应的内容 ---
   const activitiesForDate = chat.loversSpaceData.dailyActivity?.[dateStr];
   const contentContainer = document.createElement('div');
   viewEl.appendChild(contentContainer);
@@ -469,7 +472,7 @@ function renderLSDailyActivityForDate(chat, date) {
             <button id="ls-generate-activity-btn">生成今天的足迹</button>
             <p class="hint">（此操作每天只能进行一次）</p>
         </div>
-      `;
+    `;
       contentContainer.querySelector('#ls-generate-activity-btn').onclick = () => handleGenerateDailyActivity(chat);
     } else {
       contentContainer.innerHTML = `<p class="ls-empty-placeholder" style="margin-top: 50px;">这一天没有留下任何足迹哦~</p>`;
@@ -479,14 +482,11 @@ function renderLSDailyActivityForDate(chat, date) {
     listContainer.id = 'ls-activity-list';
     contentContainer.appendChild(listContainer);
 
-    // 清理旧的定时器
     if (lsActivityTimer) clearInterval(lsActivityTimer);
     lsActivityTimer = null;
 
-    // 先显示一次所有内容
     displayDailyActivities(activitiesForDate);
 
-    // 如果是今天，且内容还没显示全，才启动定时器
     if (dateStr === todayStr) {
       const hasAllDisplayed = displayDailyActivities(activitiesForDate);
       if (!hasAllDisplayed) {
@@ -502,14 +502,12 @@ function renderLSDailyActivityForDate(chat, date) {
   }
 }
 
-// ▼▼▼ 用下面这块【修正版】的代码，替换掉旧的 openActivityCalendar 和 renderActivityCalendar 两个函数 ▼▼▼
-
 /**
- * 【日历核心-已修正】打开每日足迹的专属日历弹窗
+ * 打开每日足迹日历弹窗
+ * 初始化并显示足迹日历，支持月份切换和日期选择
  */
 function openActivityCalendar() {
   const modal = document.getElementById('ls-activity-calendar-modal');
-  // 【核心修正】现在我们把日历内容填充到 .modal-body 里面
   const body = document.getElementById('ls-activity-calendar-body');
   const chat = state.chats[activeLoversSpaceCharId];
 
@@ -517,11 +515,11 @@ function openActivityCalendar() {
   const month = currentActivityDate.getMonth() + 1;
   body.innerHTML = renderActivityCalendar(year, month, chat.loversSpaceData.dailyActivity || {});
 
-  // 使用事件委托来处理弹窗内的所有点击
+  // 使用事件委托处理弹窗内所有点击事件
   body.onclick = e => {
     const target = e.target;
 
-    // 点击月份切换按钮
+    // 处理月份切换按钮点击
     if (target.closest('#ls-activity-cal-prev-btn') || target.closest('#ls-activity-cal-next-btn')) {
       const currentDisplay = body.querySelector('#ls-activity-cal-month-display').textContent;
       const [y, m] = currentDisplay.match(/\d+/g).map(Number);
@@ -540,28 +538,31 @@ function openActivityCalendar() {
       return;
     }
 
-    // 点击日历格子
+    // 处理日期格子点击
     const dayCell = target.closest('.ls-calendar-day:not(.empty)');
     if (dayCell && dayCell.dataset.date) {
       const [y, m, d] = dayCell.dataset.date.split('-').map(Number);
       currentActivityDate = new Date(y, m - 1, d);
       renderLSDailyActivityForDate(chat, currentActivityDate);
-      modal.classList.remove('visible'); // 点击日期后关闭弹窗
+      modal.classList.remove('visible');
       return;
     }
 
-    // 点击关闭按钮
+    // 处理关闭按钮点击
     if (target.closest('#ls-activity-cal-close-btn')) {
       modal.classList.remove('visible');
     }
   };
 
-  // 显示弹窗
   modal.classList.add('visible');
 }
 
 /**
- * 【日历核心-已修正】生成足迹日历的HTML，和心情日记的日历分开
+ * 生成足迹日历HTML
+ * @param {number} year - 年份
+ * @param {number} month - 月份
+ * @param {object} activityData - 活动数据
+ * @returns {string} 日历HTML字符串
  */
 function renderActivityCalendar(year, month, activityData) {
   const date = new Date(year, month - 1, 1);
@@ -569,7 +570,6 @@ function renderActivityCalendar(year, month, activityData) {
   const daysInMonth = new Date(year, month, 0).getDate();
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // 【核心修正】移除了 h3 标题，并把关闭按钮改成了和你项目风格一致的按钮
   let calendarHtml = `
     <div class="ls-calendar-wrapper">
         <div class="ls-calendar-header">
@@ -580,8 +580,8 @@ function renderActivityCalendar(year, month, activityData) {
         <div class="ls-calendar-weekdays">
             <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
         </div>
-        <div class="ls-calendar-grid">
-  `;
+    <div class="ls-calendar-grid">
+    `;
 
   for (let i = 0; i < firstDay; i++) {
     calendarHtml += '<div class="ls-calendar-day empty"></div>';
@@ -597,25 +597,22 @@ function renderActivityCalendar(year, month, activityData) {
     if (hasActivity) classes += ' has-activity';
 
     calendarHtml += `
-      <div class="${classes}" data-date="${dateStr}" style="cursor: pointer;">
-          <div class="day-number">${day}</div>
-          ${hasActivity ? '<span class="activity-dot">🐾</span>' : ''}
-      </div>
-    `;
+        <div class="${classes}" data-date="${dateStr}" style="cursor: pointer;">
+            <div class="day-number">${day}</div>
+            ${hasActivity ? '<span class="activity-dot">🐾</span>' : ''}
+        </div>
+        `;
   }
   calendarHtml += `</div></div>
     <div class="modal-footer" style="padding-top: 15px;">
         <button class="save" id="ls-activity-cal-close-btn" style="width: 100%;">关闭</button>
     </div>
-  `;
+    `;
   return calendarHtml;
 }
 
-// ▲▲▲ 替换到这里结束 ▲▲▲
-
-// ▼▼▼ 用这块【已添加HTML小剧场渲染】的代码，替换旧的 displayDailyActivities 函数 ▼▼▼
 /**
- * 【UI渲染 V2 - 支持HTML小剧场】显示当天的活动列表
+ * 显示当天的活动列表
  * @param {Array} activities - 当天所有活动的数组
  * @returns {boolean} - 如果所有活动都已显示，返回 true
  */
@@ -650,52 +647,48 @@ function displayDailyActivities(activities) {
             `;
       listEl.appendChild(itemEl);
 
-      // ★★★★★ 这就是本次新增的核心代码！ ★★★★★
-      // 在渲染完主要的活动条目后，检查是否存在 html_snippet
+      // 渲染HTML小剧场（如果存在）
       if (activity.html_snippet) {
-        // 如果存在，就创建一个新的div来包裹它
         const snippetEl = document.createElement('div');
-        snippetEl.className = 'ls-activity-snippet'; // 给它一个专属的class，方便我们用CSS美化
-        snippetEl.innerHTML = activity.html_snippet; // 把AI生成的HTML代码直接放进去
-        listEl.appendChild(snippetEl); // 添加到列表末尾
+        snippetEl.className = 'ls-activity-snippet';
+        snippetEl.innerHTML = activity.html_snippet;
+        listEl.appendChild(snippetEl);
       }
-      // ★★★★★ 新增代码结束 ★★★★★
     });
   }
 
-  // 检查是否所有活动都已显示
   return visibleActivities.length === activities.length;
 }
-// ▲▲▲ 替换结束 ▲▲▲
+
 /**
- * 【全新辅助函数】打开文件选择器，并返回本地图片的Base64编码
+ * 打开文件选择器并返回本地图片的Base64编码
  * @returns {Promise<string|null>} - 返回图片的Base64 Data URL，如果用户取消则返回null
  */
 function uploadImageLocally() {
   return new Promise(resolve => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*'; // 只接受图片文件
+    input.accept = 'image/*';
 
     input.onchange = e => {
       const file = e.target.files[0];
       if (file) {
         const reader = new FileReader();
         reader.onload = readerEvent => {
-          resolve(readerEvent.target.result); // 返回Base64字符串
+          resolve(readerEvent.target.result);
         };
         reader.readAsDataURL(file);
       } else {
-        resolve(null); // 用户关闭了文件选择框
+        resolve(null);
       }
     };
 
     input.click();
   });
 }
-// ▼▼▼ 用这块【已添加HTML小剧场】的代码，完整替换你旧的 handleGenerateDailyActivity 函数 ▼▼▼
+
 /**
- * 【AI核心 V2 - 支持HTML小剧场】触发AI生成一整天的手机活动记录
+ * 触发AI生成一整天的手机活动记录
  * @param {object} chat - 当前角色的聊天对象
  */
 async function handleGenerateDailyActivity(chat) {
@@ -707,41 +700,40 @@ async function handleGenerateDailyActivity(chat) {
     return;
   }
 
-  // ★★★★★ 核心修改就在这里！ ★★★★★
   const systemPrompt = `
-# 角色扮演任务
-你是一个手机活动模拟器。你的任务是根据角色“${chat.name}”的人设，为Ta生成一整天（从午夜0点到晚上23点）的、详细且真实的手机使用记录，根据人设规定起床时间。
+        # 角色扮演任务
+        你是一个手机活动模拟器。你的任务是根据角色“${chat.name}”的人设，为Ta生成一整天（从午夜0点到晚上23点）的、详细且真实的手机使用记录，根据人设规定起床时间。
 
-# 角色人设 (必须严格遵守)
-${chat.settings.aiPersona}
+        # 角色人设 (必须严格遵守)
+        ${chat.settings.aiPersona}
 
-# 核心规则
-1.  **时间连贯性**: 你的活动记录必须按时间顺序排列，覆盖全天，禁止时间过渡过于死板。
-2.  **内容多样性**: 活动类型应丰富多样，包括但不限于应用使用、手机状态、其他（设置闹钟、查看天气等）。
-3.  **符合人设**: 所有活动都必须与角色的性格、职业和兴趣爱好高度相关。
-4.  **【【【全新功能：HTML小剧场】】】**:
-    -   对于某些特定的活动（例如看电影、吃饭、购物），你可以【随机且可选地】额外生成一个名为 \`html_snippet\` 的字段。
-    -   这个字段的内容是【一小段HTML代码】，用来展示一个与活动相关的视觉元素，例如电影票根、购物小票等。
-    -   你【不需要】为每个活动都生成这个字段，只需在你认为合适的、有趣的节点上随机加入，以增加趣味性。
-5.  **格式铁律**: 你的回复【必须且只能】是一个严格的JSON数组，每个对象代表一条活动记录。
+        # 核心规则
+        1.  **时间连贯性**: 你的活动记录必须按时间顺序排列，覆盖全天，禁止时间过渡过于死板。
+        2.  **内容多样性**: 活动类型应丰富多样，包括但不限于应用使用、手机状态、其他（设置闹钟、查看天气等）。
+        3.  **符合人设**: 所有活动都必须与角色的性格、职业和兴趣爱好高度相关。
+        4.  **【【【全新功能：HTML小剧场】】】**:
+            -   对于某些特定的活动（例如看电影、吃饭、购物），你可以【随机且可选地】额外生成一个名为 \`html_snippet\` 的字段。
+            -   这个字段的内容是【一小段HTML代码】，用来展示一个与活动相关的视觉元素，例如电影票根、购物小票等。
+            -   你【不需要】为每个活动都生成这个字段，只需在你认为合适的、有趣的节点上随机加入，以增加趣味性。
+        5.  **格式铁律**: 你的回复【必须且只能】是一个严格的JSON数组，每个对象代表一条活动记录。
 
-# JSON对象结构 (html_snippet 是可选的！)
-{
-  "time": "HH:mm",
-  "description": "活动描述",
-  "duration": "(可选) 持续时长",
-  "icon": "单个emoji或svg图标",
-  "html_snippet": "(可选) 用于生成小剧场的HTML代码"
-}
+        # JSON对象结构 (html_snippet 是可选的！)
+        {
+        "time": "HH:mm",
+        "description": "活动描述",
+        "duration": "(可选) 持续时长",
+        "icon": "单个emoji或svg图标",
+        "html_snippet": "(可选) 用于生成小剧场的HTML代码"
+        }
 
-# HTML小剧场格式示例 (供你参考，你可以自由创作):
--   **看电影**:
-    "html_snippet": "<div class='movie-ticket'><div class='ticket-header'>EPHONE影城</div><div class='ticket-body'><h3>《你的名字》</h3><p>场次: 14:30 | 7号厅 8排5座</p></div></div>"
--   **吃饭**:
-    "html_snippet": "<div class='receipt'><div class='receipt-header'>温馨小馆</div><ul><li><span>拉面 x1</span><span>￥28.00</span></li><li><span>溏心蛋 x1</span><span>￥5.00</span></li></ul><div class='receipt-total'><strong>合计:</strong><strong>￥33.00</strong></div></div>"
+        # HTML小剧场格式示例 (供你参考，你可以自由创作):
+        -   **看电影**:
+            "html_snippet": "<div class='movie-ticket'><div class='ticket-header'>EPHONE影城</div><div class='ticket-body'><h3>《你的名字》</h3><p>场次: 14:30 | 7号厅 8排5座</p></div></div>"
+        -   **吃饭**:
+            "html_snippet": "<div class='receipt'><div class='receipt-header'>温馨小馆</div><ul><li><span>拉面 x1</span><span>￥28.00</span></li><li><span>溏心蛋 x1</span><span>￥5.00</span></li></ul><div class='receipt-total'><strong>合计:</strong><strong>￥33.00</strong></div></div>"
 
-现在，请开始为“${chat.name}”生成今天的生活记录。
-`;
+        现在，请开始为“${chat.name}”生成今天的生活记录。
+    `;
 
   try {
     const messagesForApi = [{ role: 'user', content: systemPrompt }];
@@ -799,7 +791,7 @@ ${chat.settings.aiPersona}
   } catch (error) {
     console.error('生成今日足迹失败:', error);
     await showCustomAlert('生成失败', `发生了一个错误：\n${error.message}`);
-    // 失败时，恢复“生成”按钮的显示
+    // 失败时，恢复"生成"按钮的显示
     const viewEl = document.getElementById('ls-activity-view');
     viewEl.innerHTML = `
             <div class="ls-activity-generate-container">
@@ -810,15 +802,14 @@ ${chat.settings.aiPersona}
     document.getElementById('ls-generate-activity-btn').onclick = () => handleGenerateDailyActivity(chat);
   }
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
- * 【全新】处理更换情侣空间背景的逻辑
+ * 处理更换情侣空间背景的逻辑
  */
 async function handleChangeLoversSpaceBackground() {
   if (!activeLoversSpaceCharId) return;
 
-  // 复用已有的功能弹窗，让用户选择
+  // 让用户选择上传方式
   const choice = await showChoiceModal('更换空间背景', [
     { text: '📁 从本地上传', value: 'local' },
     { text: '🌐 使用网络URL', value: 'url' },
@@ -827,36 +818,33 @@ async function handleChangeLoversSpaceBackground() {
   let newBackgroundUrl = null;
 
   if (choice === 'local') {
-    // 复用已有的本地图片上传函数
+    // 从本地上传图片
     newBackgroundUrl = await uploadImageLocally();
   } else if (choice === 'url') {
-    // 复用已有的URL输入弹窗
+    // 使用网络URL
     const currentBg = state.chats[activeLoversSpaceCharId].loversSpaceData.background;
     newBackgroundUrl = await showCustomPrompt('更换背景', '请输入新的图片URL', currentBg, 'url');
   }
 
-  // 如果获取到了新的URL
+  // 处理新背景URL
   if (newBackgroundUrl && newBackgroundUrl.trim()) {
     const chat = state.chats[activeLoversSpaceCharId];
     chat.loversSpaceData.background = newBackgroundUrl.trim();
 
-    // 保存到数据库
+    // 保存到数据库并重新渲染
     await db.chats.put(chat);
-
-    // 立刻重新渲染情侣空间以应用新背景
     await renderLoversSpace(chat);
 
     alert('情侣空间背景已更新！');
   } else if (newBackgroundUrl !== null) {
-    // 用户点击了确定但没输入内容
     alert('请输入一个有效的URL或选择一个文件！');
   }
 }
 
-// ▲▲▲ 新函数粘贴结束 ▲▲▲
-
 /**
- * 渲染“说说”列表 (V2 - 已添加评论和删除功能)
+ * 渲染"说说"列表
+ * @param {Array} moments - 说说数组
+ * @param {object} chat - 聊天对象
  */
 function renderLSMoments(moments, chat) {
   const listEl = document.getElementById('ls-moments-list');
@@ -866,16 +854,16 @@ function renderLSMoments(moments, chat) {
     return;
   }
 
-  // 我们需要原始的数组索引来做删除，所以这里不用 [...moments].reverse()
+  // 从新到旧显示说说
   for (let i = moments.length - 1; i >= 0; i--) {
     const moment = moments[i];
-    const originalIndex = i; // 保存原始索引
+    const originalIndex = i;
 
     const isUser = moment.author === 'user';
     const authorName = isUser ? chat.settings.myNickname || '我' : chat.name;
     const authorAvatar = isUser ? chat.settings.myAvatar : chat.settings.aiAvatar;
 
-    // --- 核心修改：在这里构建评论区的HTML ---
+    // 构建评论区HTML
     let commentsHtml = '';
     if (moment.comments && moment.comments.length > 0) {
       moment.comments.forEach((comment, commentIndex) => {
@@ -891,10 +879,10 @@ function renderLSMoments(moments, chat) {
 
     const card = document.createElement('div');
     card.className = 'ls-moment-card';
-    // 【重要】把说说的原始索引存起来，方便后面操作
+    // 保存原始索引用于删除操作
     card.dataset.momentIndex = originalIndex;
 
-    // --- 核心修改：加入新的HTML结构 ---
+    // 构建说说卡片HTML
     card.innerHTML = `
             <img src="${authorAvatar}" class="avatar">
             <div class="moment-main">
@@ -904,7 +892,7 @@ function renderLSMoments(moments, chat) {
                     <span class="timestamp">${formatPostTimestamp(moment.timestamp)}</span>
                 </div>
                 
-                <!-- ▼▼▼ 这是新增的整个底部区域 ▼▼▼ -->
+                <!-- 评论区域 -->
                 <div class="ls-moment-footer">
                     <div class="ls-moment-comments-container">
                         ${commentsHtml}
@@ -914,18 +902,20 @@ function renderLSMoments(moments, chat) {
                         <button class="ls-comment-send-btn">发送</button>
                     </div>
                 </div>
-                <!-- ▲▲▲ 新增区域结束 ▲▲▲ -->
+                <!-- 评论区域结束 -->
 
             </div>
-            <!-- ▼▼▼ 这是新增的说说删除按钮 ▼▼▼ -->
+            <!-- 删除说说按钮 -->
             <button class="ls-moment-delete-btn" title="删除这条说说">×</button>
         `;
     listEl.appendChild(card);
   }
 }
-// ▼▼▼ 【全新】这是情侣空间专属音乐播放器的CSS样式 ▼▼▼
+
 /**
- * 【全新】渲染“分享”列表 (无封面，带简介和感想版)
+ * 渲染"分享"列表
+ * @param {Array} shares - 分享数组
+ * @param {object} chat - 聊天对象
  */
 function renderLSShares(shares, chat) {
   const listEl = document.getElementById('ls-shares-list');
@@ -943,15 +933,15 @@ function renderLSShares(shares, chat) {
     const typeText = { song: '歌曲', movie: '电影', book: '书籍', game: '游戏' }[share.shareType] || '分享';
     const authorName = share.author === 'user' ? chat.settings.myNickname || '我' : chat.name;
 
-    // ▼▼▼ 核心修改在这里：我们重构了“摘要”部分的逻辑 ▼▼▼
+    // 构建分享摘要HTML
     let summaryHtml = '';
 
-    // 1. 如果是歌曲，显示歌手
+    // 歌曲显示歌手
     if (share.shareType === 'song' && share.artist) {
       summaryHtml += `<p style="margin:0; font-weight: 500;"><strong>歌手:</strong> ${share.artist}</p>`;
     }
 
-    // 2. 如果有简介 (书籍和电影)，就显示简介
+    // 显示简介
     if (share.summary) {
       summaryHtml += `<p style="margin:0; margin-top: 4px;"><strong>简介:</strong> ${share.summary.replace(
         /\n/g,
@@ -959,18 +949,17 @@ function renderLSShares(shares, chat) {
       )}</p>`;
     }
 
-    // 3. 如果有感想，就显示感想
+    // 显示感想
     if (share.thoughts) {
-      summaryHtml += `<p style="margin:0; margin-top: 4px; color: #8a8a8a; font-style: italic;"><strong>感想:</strong> “${share.thoughts}”</p>`;
+      summaryHtml += `<p style="margin:0; margin-top: 4px; color: #8a8a8a; font-style: italic;"><strong>感想:</strong> "${share.thoughts}"</p>`;
     }
 
-    // 4. 如果啥都没有，给一个默认提示
+    // 默认提示
     if (!summaryHtml) {
       summaryHtml = '<p style="margin:0; color: #8a8a8a;">暂无更多信息</p>';
     }
-    // ▲▲▲ 修改结束 ▲▲▲
 
-    // 【核心修改】这里的模板已经移除了<img>标签
+    // 构建分享项HTML
     item.innerHTML = `
             <div class="share-info">
                 <div class="title">
@@ -987,18 +976,17 @@ function renderLSShares(shares, chat) {
   });
 }
 
-// ▼▼▼ 【全新】情侣空间功能核心函数 ▼▼▼
-
-// ▼▼▼ 用这块【新代码】替换旧的 renderLSPhotos 函数 ▼▼▼
 /**
- * 渲染“照片”列表
+ * 渲染"照片"列表
+ * @param {Array} photos - 照片数组
+ * @param {object} chat - 聊天对象
  */
 function renderLSPhotos(photos, chat) {
   const listEl = document.getElementById('ls-album-list');
   listEl.innerHTML = '';
   if (!photos || photos.length === 0) {
     listEl.innerHTML =
-      '<p class="ls-empty-placeholder" style="grid-column: 1 / -1;">还没有任何照片，点击右下角“+”上传第一张吧！</p>';
+      '<p class="ls-empty-placeholder" style="grid-column: 1 / -1;">还没有任何照片，点击右下角"上传第一张吧！</p>';
     return;
   }
 
@@ -1006,26 +994,25 @@ function renderLSPhotos(photos, chat) {
     const item = document.createElement('div');
     item.className = 'ls-album-item';
 
-    // 【核心修改1】在这里为整个项目添加时间戳，方便我们识别是哪张照片
+    // 为每个照片项添加时间戳，用于标识和操作特定照片
     item.dataset.timestamp = photo.timestamp;
 
     const imageUrl = photo.type === 'image' ? photo.url : 'https://i.postimg.cc/KYr2qRCK/1.jpg';
 
-    // 【核心修改2】在 .cover 内部添加了删除按钮的HTML
+    // 构建照片项HTML，包含背景图片和删除按钮
     item.innerHTML = `
             <div class="cover" style="background-image: url(${imageUrl});">
                 <button class="ls-photo-delete-btn">×</button>
             </div>
         `;
 
-    // 【核心修改3】我们不再在这里单独绑定点击事件，将在最后一步统一处理
     listEl.appendChild(item);
   });
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
  * 打开创建说说的弹窗
+ * 清空输入框内容并显示说说创建模态框
  */
 function openMomentCreator() {
   document.getElementById('ls-moment-content-input').value = '';
@@ -1033,7 +1020,8 @@ function openMomentCreator() {
 }
 
 /**
- * 用户发布说说 (V2 - 已添加comments字段)
+ * 用户发布说说
+ * 处理用户提交的说说内容，保存到数据库并通知AI
  */
 async function handlePostMoment() {
   const content = document.getElementById('ls-moment-content-input').value.trim();
@@ -1046,7 +1034,7 @@ async function handlePostMoment() {
     author: 'user',
     content: content,
     timestamp: Date.now(),
-    comments: [], // <-- 核心新增：为新说说创建一个空的评论数组
+    comments: [], // 为新说说创建一个空的评论数组
   };
   // 确保moments数组存在
   if (!chat.loversSpaceData.moments) {
@@ -1057,27 +1045,23 @@ async function handlePostMoment() {
 
   renderLSMoments(chat.loversSpaceData.moments, chat);
   document.getElementById('ls-create-moment-modal').classList.remove('visible');
-  // ▼▼▼ 在 handlePostMoment 函数的末尾，粘贴下面这块新代码 ▼▼▼
+
   // 创建一条对用户隐藏，但对AI可见的系统消息
   const hiddenMessage = {
     role: 'system',
     content: `[系统提示：用户（${
       chat.settings.myNickname || '我'
-    }）刚刚在我们的情侣空间发布了一条新的说说，内容是：“${content}”。请你根据人设，使用 'ls_comment' 指令对这条说说发表你的看法。]`,
+    }）刚刚在我们的情侣空间发布了一条新的说说，内容是："${content}"。请你根据人设，使用 'ls_comment' 指令对这条说说发表你的看法。]`,
     timestamp: Date.now(),
     isHidden: true, // 这个标记能让消息对你隐藏，但AI能看见
   };
   chat.history.push(hiddenMessage);
   await db.chats.put(chat); // 再次保存，确保隐藏消息被存入
-
-  // （可选）如果你希望AI在你发完说说后立刻就去评论，可以取消下面这行的注释
-  // triggerAiResponse();
-  // ▲▲▲ 粘贴结束 ▲▲▲
 }
 
-// ▼▼▼ 用这块新代码替换旧的 openAlbumCreator 函数 ▼▼▼
 /**
  * 打开上传照片的弹窗
+ * 初始化照片上传模态框，重置所有输入和预览内容
  */
 function openAlbumCreator() {
   tempUploadedPhotos = [];
@@ -1088,16 +1072,15 @@ function openAlbumCreator() {
   document.getElementById('ls-text-image-desc-input').value = '';
   document.getElementById('ls-photo-input').value = null;
 
-  // 默认显示“上传图片”模式
+  // 默认显示"上传图片"模式
   document.getElementById('ls-switch-to-image-mode').click();
 
   document.getElementById('ls-create-album-modal').classList.add('visible');
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
-// ▼▼▼ 用这块新代码替换旧的 handlePhotoSelection 函数 ▼▼▼
 /**
  * 处理用户选择照片后的预览 (单张版)
+ * @param {FileList} files - 用户选择的文件列表
  */
 function handlePhotoSelection(files) {
   const previewContainer = document.getElementById('ls-photo-preview-container');
@@ -1120,22 +1103,21 @@ function handlePhotoSelection(files) {
   };
   reader.readAsDataURL(file);
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
-// ▼▼▼ 用这块【已修复】的代码，替换掉你旧的 handleConfirmAlbum 函数 ▼▼▲
 /**
  * 用户确认上传照片 (这是修复后的版本)
+ * 处理用户确认上传照片的逻辑，支持图片和文字图两种模式
  */
 async function handleConfirmAlbum() {
   const chat = state.chats[activeLoversSpaceCharId];
   if (!chat) return;
 
-  // 1. 先判断当前是哪种模式
+  // 先判断当前是哪种模式
   const isImageMode = document.getElementById('ls-image-mode-content').classList.contains('active');
   let newPhoto;
 
   if (isImageMode) {
-    // 2. 如果是“上传图片”模式，执行这里的检查
+    // 如果是"上传图片"模式，执行这里的检查
     if (tempUploadedPhotos.length === 0) {
       alert('请选择一张照片！'); // 只有在这种模式下，这个提示才是正确的
       return;
@@ -1152,7 +1134,7 @@ async function handleConfirmAlbum() {
       timestamp: Date.now(),
     };
   } else {
-    // 3. 如果是“使用文字图”模式，执行这里的检查
+    // 如果是"使用文字图"模式，执行这里的检查
     const description = document.getElementById('ls-text-image-desc-input').value.trim();
     if (!description) {
       alert('文字图描述不能为空！');
@@ -1165,7 +1147,7 @@ async function handleConfirmAlbum() {
     };
   }
 
-  // 4. 后续的保存和刷新逻辑保持不变
+  // 后续的保存和刷新逻辑保持不变
   if (!chat.loversSpaceData.photos) {
     chat.loversSpaceData.photos = [];
   }
@@ -1176,11 +1158,10 @@ async function handleConfirmAlbum() {
   renderLSPhotos(chat.loversSpaceData.photos, chat);
   document.getElementById('ls-create-album-modal').classList.remove('visible');
 }
-// ▲▲▲ 替换结束 ▲▲▲
-// ▼▼▼ 把这一整块全新的功能函数，粘贴到 init() 函数的上方 ▼▼▼
 
 /**
- * 【全新】删除情侣空间中的一张照片
+ * 删除情侣空间中的一张照片
+ * @param {number} timestamp - 要删除照片的时间戳
  */
 async function handleDeleteLSPhoto(timestamp) {
   // 弹出确认框，防止误删
@@ -1204,18 +1185,17 @@ async function handleDeleteLSPhoto(timestamp) {
     alert('照片已删除。');
   }
 }
-// ▲▲▲ 粘贴结束 ▲▲▲
-/* ▼▼▼ 把这一整块全新的功能函数，粘贴到 // ▼▼▼ 【全新】情侣空间功能核心函数 ▼▼▼ 的正下方 ▼▼▼ */
 
-// ▼▼▼ 用这块【已添加删除按钮】的代码，完整替换掉旧的 renderLSLetters 函数 ▼▼▼
 /**
- * 【全新】渲染“情书”列表 (已加入删除功能)
+ * 渲染"情书"列表 (已加入删除功能)
+ * @param {Array} letters - 情书数组
+ * @param {object} chat - 聊天对象
  */
 function renderLSLetters(letters, chat) {
   const listEl = document.getElementById('ls-letters-list');
   listEl.innerHTML = ''; // 先清空
   if (!letters || letters.length === 0) {
-    listEl.innerHTML = '<p class="ls-empty-placeholder">还没有任何情书，点击右下角“+”写下第一封吧！</p>';
+    listEl.innerHTML = '<p class="ls-empty-placeholder">还没有任何情书，点击右下角"写下第一封吧！</p>';
     return;
   }
 
@@ -1232,9 +1212,9 @@ function renderLSLetters(letters, chat) {
             </svg>
         `;
 
-    // 【核心修改】在这里加入了删除按钮的HTML
+    // 在情书项中加入删除按钮的HTML
     item.innerHTML = `
-            <!-- 这是新增的删除按钮 -->
+            <!-- 删除情书按钮 -->
             <button class="ls-letter-delete-btn" title="删除这封情书">×</button>
 
             ${svgIcon}
@@ -1253,7 +1233,12 @@ function renderLSLetters(letters, chat) {
     listEl.appendChild(item);
   });
 }
-// ▲▲▲ 替换结束 ▲▲▲
+
+/**
+ * 格式化时间戳为易读的时间显示
+ * @param {number} timestamp - 时间戳
+ * @returns {string} 格式化后的时间字符串
+ */
 function formatPostTimestamp(timestamp) {
   if (!timestamp) return '';
   const now = new Date();
@@ -1275,8 +1260,9 @@ function formatPostTimestamp(timestamp) {
     return `${year}-${month}-${day} ${hours}:${minutes}`;
   }
 }
+
 /**
- * 【全新】打开写情书/回信的弹窗
+ * 打开写情书/回信的弹窗
  * @param {object | null} replyToLetter - 如果是回信，则传入被回复的情书对象
  */
 function openLoveLetterEditor(replyToLetter = null) {
@@ -1309,7 +1295,8 @@ function openLoveLetterEditor(replyToLetter = null) {
 }
 
 /**
- * 【全新】处理用户点击“寄出”按钮的逻辑
+ * 处理用户点击"寄出"按钮的逻辑
+ * 保存用户撰写的情书并通知AI
  */
 async function handlePostLoveLetter() {
   const modal = document.getElementById('ls-create-letter-modal');
@@ -1358,30 +1345,25 @@ async function handlePostLoveLetter() {
   chat.loversSpaceData.loveLetters.push(newLetter);
 
   await db.chats.put(chat);
-  // ▼▼▼ 在这里粘贴下面的新代码 ▼▼▼
+
   // 如果是用户写的信，就给AI发一个隐藏的系统通知
   if (newLetter.senderId === 'user') {
     const hiddenMessage = {
       role: 'system',
-      content: `[系统提示：用户刚刚在情侣空间给你写了一封情书，内容是：“${content}”。请你根据人设，使用 'ls_letter' 指令给用户写一封回信。]`,
+      content: `[系统提示：用户刚刚在情侣空间给你写了一封情书，内容是："${content}"。请你根据人设，使用 'ls_letter' 指令给用户写一封回信。]`,
       timestamp: Date.now(),
       isHidden: true, // 这个标记能让消息对你隐藏，但AI能看见
     };
     chat.history.push(hiddenMessage);
     await db.chats.put(chat); // 再次保存，确保隐藏消息被存入
-
-    // （可选）如果你希望AI在你发信后立刻回复，可以把下面这行的注释去掉
-    // triggerAiResponse();
   }
-  // ▲▲▲ 粘贴结束 ▲▲▲
 
   renderLSLetters(chat.loversSpaceData.loveLetters, chat);
   modal.classList.remove('visible');
 }
 
-// ▼▼▼ 用这块【使用全新信纸弹窗】的新代码，替换旧的 showLoveLetterDetail 函数 ▼▼▼
 /**
- * 【全新】显示情书详情 (信纸样式版)
+ * 显示情书详情 (信纸样式版)
  * @param {string} letterId - 要显示的情书的ID
  */
 async function showLoveLetterDetail(letterId) {
@@ -1402,14 +1384,11 @@ async function showLoveLetterDetail(letterId) {
   // 显示弹窗
   modal.classList.add('visible');
 }
-// ▲▲▲ 替换结束 ▲▲▲
-// ▼▼▼ 把这一整块全新的代码，粘贴到 // ▲▲▲ 情侣空间功能函数结束 ▲▲▲ 的正上方 ▼▼▼
-/* ▼▼▼ 把这一整块全新的代码，粘贴到 // ▲▲▲ 情侣空间功能函数结束 ▲▲▲ 的正上方 ▼▼▼ */
-
-/* --- 【全新】情侣空间-情绪日记功能核心函数 --- */
 
 /**
  * 渲染情绪日记的主界面（日历和心情罐子）
+ * @param {number} year - 年份
+ * @param {number} month - 月份
  */
 async function renderLSDiaryView(year, month) {
   const viewEl = document.getElementById('ls-diary-view');
@@ -1427,7 +1406,11 @@ async function renderLSDiaryView(year, month) {
 }
 
 /**
- * 【辅助函数】生成日历的HTML
+ * 生成日历的HTML
+ * @param {number} year - 年份
+ * @param {number} month - 月份
+ * @param {object} diaryData - 日记数据
+ * @returns {string} 日历HTML字符串
  */
 function renderCalendar(year, month, diaryData) {
   const date = new Date(year, month - 1, 1);
@@ -1474,7 +1457,11 @@ function renderCalendar(year, month, diaryData) {
 }
 
 /**
- * 【辅助函数】生成心情罐子的HTML
+ * 生成心情罐子的HTML
+ * @param {number} year - 年份
+ * @param {number} month - 月份
+ * @param {object} diaryData - 日记数据
+ * @returns {string} 心情罐子HTML字符串
  */
 function renderMoodJar(year, month, diaryData) {
   let allEmojis = [];
@@ -1504,6 +1491,7 @@ function renderMoodJar(year, month, diaryData) {
 
 /**
  * 打开日记编辑/查看弹窗
+ * @param {string} dateStr - 日期字符串
  */
 function openDiaryModal(dateStr) {
   currentDiaryDate = dateStr;
@@ -1521,6 +1509,8 @@ function openDiaryModal(dateStr) {
 
 /**
  * 打开日记编辑器
+ * @param {string} dateStr - 日期字符串
+ * @param {object} entryData - 日记条目数据
  */
 function openDiaryEditor(dateStr, entryData) {
   const modal = document.getElementById('ls-diary-editor-modal');
@@ -1544,6 +1534,9 @@ function openDiaryEditor(dateStr, entryData) {
 
 /**
  * 打开日记查看器
+ * @param {string} dateStr - 日期字符串
+ * @param {object} entryData - 日记条目数据
+ * @param {object} chat - 聊天对象
  */
 function openDiaryViewer(dateStr, entryData, chat) {
   const modal = document.getElementById('ls-diary-viewer-modal');
@@ -1617,18 +1610,18 @@ async function handleSaveUserDiary() {
 
   // 关闭弹窗
   document.getElementById('ls-diary-editor-modal').classList.remove('visible');
-  // --- 【核心联动功能开始】 ---
+  // --- 核心联动功能开始 ---
 
-  // 1. 准备一条对用户可见的消息，告诉对方你写了日记
+  // 准备一条对用户可见的消息，告诉对方你写了日记
   const targetChat = state.chats[activeLoversSpaceCharId];
   if (targetChat) {
     const userNickname = state.qzoneSettings.nickname || '我';
-    // ▼▼▼ 用这块【新代码】替换旧的 notificationMessage 定义 ▼▼▼
+
     const notificationMessage = {
       role: 'user',
-      type: 'ls_diary_notification', // 【核心修改1】给它一个独一无二的类型
+      type: 'ls_diary_notification', // 给它一个独一无二的类型
       content: {
-        // 【核心修改2】内容变成一个对象，方便携带更多信息
+        // 内容变成一个对象，方便携带更多信息
         userEmoji: userEmoji, // 把用户选择的表情也带上
         text: '我刚刚写了今天的心情日记哦，你也快去看看吧！',
       },
@@ -1636,7 +1629,7 @@ async function handleSaveUserDiary() {
     };
     targetChat.history.push(notificationMessage);
 
-    // 2. 创建一条对AI可见的【隐藏指令】，这是整个功能的核心
+    // 创建一条对AI可见的【隐藏指令】，这是整个功能的核心
     const hiddenMessage = {
       role: 'system',
       content: `[系统指令：用户刚刚在情侣空间写了今天的日记。
@@ -1650,33 +1643,27 @@ async function handleSaveUserDiary() {
     };
     targetChat.history.push(hiddenMessage);
 
-    // 3. 保存所有更改到数据库
+    // 保存所有更改到数据库
     await db.chats.put(targetChat);
 
-    // 4. 主动跳转到单聊界面，并触发AI响应
+    // 主动跳转到单聊界面，并触发AI响应
     openChat(activeLoversSpaceCharId);
     triggerAiResponse();
   }
-  // --- 【核心联动功能结束】 ---
-
-  // ▲▲▲ 新代码粘贴结束 ▲▲▲
 
   alert('日记已保存！');
 }
 
-/* --- 情绪日记功能函数结束 --- */
-/* ▲▲▲ 新增代码粘贴结束 ▲▲▲ */
-
-/* --- 【全新】情侣空间-情侣提问功能核心函数 --- */
-
 /**
- * 渲染“情侣提问”列表
+ * 渲染"情侣提问"列表
+ * @param {Array} questions - 提问数组
+ * @param {object} chat - 聊天对象
  */
 function renderLSQuestions(questions, chat) {
   const listEl = document.getElementById('ls-questions-list');
   listEl.innerHTML = '';
   if (!questions || questions.length === 0) {
-    listEl.innerHTML = '<p class="ls-empty-placeholder">还没有人提问，点击右下角“+”发起第一个提问吧！</p>';
+    listEl.innerHTML = '<p class="ls-empty-placeholder">还没有人提问，点击右下角"+"发起第一个提问吧！</p>';
     return;
   }
 
@@ -1720,7 +1707,7 @@ function renderLSQuestions(questions, chat) {
     const card = document.createElement('div');
     card.className = 'ls-question-card';
 
-    // ▼▼▼ 核心修改就是在这里加入了删除按钮 ▼▼▼
+    // 在提问卡片中加入删除按钮
     card.innerHTML = `
             <button class="ls-question-delete-btn" data-question-id="${q.id}" title="删除此提问">×</button>
 
@@ -1742,6 +1729,7 @@ function renderLSQuestions(questions, chat) {
 
 /**
  * 打开提问弹窗
+ * 清空输入框内容并显示提问模态框
  */
 function openQuestionAsker() {
   document.getElementById('ls-question-content-input').value = '';
@@ -1750,6 +1738,7 @@ function openQuestionAsker() {
 
 /**
  * 用户发布一个新提问
+ * 处理用户提交的提问内容，保存到数据库并通知AI
  */
 async function handlePostQuestion() {
   const content = document.getElementById('ls-question-content-input').value.trim();
@@ -1776,11 +1765,10 @@ async function handlePostQuestion() {
   renderLSQuestions(chat.loversSpaceData.questions, chat);
   document.getElementById('ls-ask-question-modal').classList.remove('visible');
 
-  // ▼▼▼ 在 handlePostQuestion 函数的末尾，粘贴下面这块新代码 ▼▼▼
   // 创建一条对用户隐藏，但对AI可见的系统消息
   const hiddenMessage = {
     role: 'system',
-    content: `[系统提示：用户在情侣空间向你提了一个问题：“${content}”，问题ID是“${newQuestion.id}”。请使用 'ls_answer_question' 指令来回答。]`,
+    content: `[系统提示：用户在情侣空间向你提了一个问题："${content}"，问题ID是"${newQuestion.id}"。请使用 'ls_answer_question' 指令来回答。]`,
     timestamp: Date.now(),
     isHidden: true,
   };
@@ -1790,6 +1778,7 @@ async function handlePostQuestion() {
 
 /**
  * 打开回答问题的弹窗
+ * @param {string} questionId - 问题ID
  */
 function openAnswerEditor(questionId) {
   const chat = state.chats[activeLoversSpaceCharId];
@@ -1804,6 +1793,7 @@ function openAnswerEditor(questionId) {
 
 /**
  * 用户提交回答
+ * 处理用户提交的回答内容，保存到数据库并通知AI
  */
 async function handlePostAnswer() {
   if (!activeQuestionId) return;
@@ -1818,60 +1808,56 @@ async function handlePostAnswer() {
     question.answerer = 'user'; // 明确回答者是用户
     question.answerText = answerText;
     await db.chats.put(chat);
-    // ▼▼▼ 用这块新代码替换上面的 ▼▼▼
+
     const hiddenMessage = {
       role: 'system',
       content: `[系统提示：用户（${
         chat.settings.myNickname || '我'
-      }）刚刚在情侣空间回答了你之前提出的问题。你的问题是：“${
+      }）刚刚在情侣空间回答了你之前提出的问题。你的问题是："${
         question.questionText
-      }”，用户的回答是：“${answerText}”。]`,
+      }"，用户的回答是："${answerText}"。]`,
       timestamp: Date.now(),
       isHidden: true,
     };
     chat.history.push(hiddenMessage);
     await db.chats.put(chat);
-    // ▲▲▲ 替换结束 ▲▲▲
+
     renderLSQuestions(chat.loversSpaceData.questions, chat);
   }
   document.getElementById('ls-answer-question-modal').classList.remove('visible');
   activeQuestionId = null;
 }
+
 /**
- * 【全新】删除一条情侣提问
+ * 删除一条情侣提问
  * @param {string} questionId - 要删除的提问的ID
  */
 async function handleDeleteLSQuestion(questionId) {
-  // 1. 弹出确认框，防止误删
+  // 弹出确认框，防止误删
   const confirmed = await showCustomConfirm('删除提问', '确定要删除这个问题以及对应的回答吗？此操作无法恢复。', {
     confirmButtonClass: 'btn-danger',
   });
 
-  // 2. 如果用户确认删除
+  // 如果用户确认删除
   if (confirmed) {
     const chat = state.chats[activeLoversSpaceCharId];
     if (!chat || !chat.loversSpaceData || !chat.loversSpaceData.questions) return;
 
-    // 3. 从提问数组中过滤掉要删除的提问
+    // 从提问数组中过滤掉要删除的提问
     chat.loversSpaceData.questions = chat.loversSpaceData.questions.filter(q => q.id !== questionId);
 
-    // 4. 保存更新后的聊天数据
+    // 保存更新后的聊天数据
     await db.chats.put(chat);
 
-    // 5. 重新渲染提问列表，让删除效果立刻生效
+    // 重新渲染提问列表，让删除效果立刻生效
     renderLSQuestions(chat.loversSpaceData.questions, chat);
 
     alert('提问已删除。');
   }
 }
 
-/* --- 情侣提问功能函数结束 --- */
-
-// ▲▲▲ 粘贴结束 ▲▲▲
-// ▼▼▼ 【全新】这里是情侣空间专属音乐播放器的所有核心功能函数 ▼▼▼
-
 /**
- * 【总入口】当用户在情侣空间点击一首分享的歌曲时触发
+ * 当用户在情侣空间点击一首分享的歌曲时触发
  * @param {object} shareData - 包含歌曲信息的分享对象
  */
 async function openLoversSpaceMusicPlayer(shareData) {
@@ -1924,7 +1910,7 @@ async function openLoversSpaceMusicPlayer(shareData) {
     return;
   }
 
-  // 【新增】获取歌词
+  // 获取歌词
   const lrcContent = (await getLyricsForSong(songData.id, songData.source)) || '';
 
   // 创建新的歌曲对象并添加到播放列表
@@ -1933,7 +1919,7 @@ async function openLoversSpaceMusicPlayer(shareData) {
     artist: songData.artist,
     src: result.data.url,
     cover: songData.cover,
-    lrcContent: lrcContent, // <-- 就是新增了这一行！
+    lrcContent: lrcContent,
   };
 
   lsMusicState.playlist.push(newSong);
@@ -1945,6 +1931,10 @@ async function openLoversSpaceMusicPlayer(shareData) {
   document.getElementById('ls-music-player-overlay').classList.add('visible');
 }
 
+/**
+ * 播放指定索引的歌曲
+ * @param {number} index - 歌曲在播放列表中的索引
+ */
 async function playLSSong(index) {
   if (index < 0 || index >= lsMusicState.playlist.length) return;
 
@@ -1952,8 +1942,8 @@ async function playLSSong(index) {
   const track = lsMusicState.playlist[index];
   const lsAudioPlayer = document.getElementById('ls-audio-player');
 
-  // 【新增】解析和渲染歌词
-  track.parsedLyrics = parseLRC(track.lrcContent || ''); // 复用你已有的歌词解析函数
+  // 解析和渲染歌词
+  track.parsedLyrics = parseLRC(track.lrcContent || ''); // 复用已有的歌词解析函数
   track.currentLyricIndex = -1;
   renderLSLyrics(track);
 
@@ -2082,10 +2072,10 @@ function renderLSMusicPlaylist() {
     playlistBody.appendChild(item);
   });
 }
-// ▼▼▼ 在 clearLSMusicPlaylist() 函数的上方，粘贴这一整块新代码 ▼▼▼
 
 /**
- * 【全新】渲染歌词列表 (情侣空间版)
+ * 渲染歌词列表 (情侣空间版)
+ * @param {object} track - 歌曲对象
  */
 function renderLSLyrics(track) {
   const lyricsList = document.getElementById('ls-lyrics-list');
@@ -2105,7 +2095,8 @@ function renderLSLyrics(track) {
 }
 
 /**
- * 【全新】更新当前高亮的歌词 (情侣空间版)
+ * 更新当前高亮的歌词 (情侣空间版)
+ * @param {number} currentTime - 当前播放时间
  */
 function updateLSCurrentLyric(currentTime) {
   const track = lsMusicState.playlist[lsMusicState.currentIndex];
@@ -2140,8 +2131,6 @@ function updateLSCurrentLyric(currentTime) {
   }
 }
 
-// ▲▲▲ 新代码粘贴结束 ▲▲▲
-
 /**
  * 清空播放列表 (情侣空间版)
  */
@@ -2157,11 +2146,6 @@ function clearLSMusicPlaylist() {
   renderLSMusicPlayerUI();
   renderLSMusicPlaylist();
 }
-
-// ▲▲▲ 核心功能函数粘贴结束 ▲▲▲
-// ▼▼▼ 把这一整块全新的代码，粘贴到 init() 函数的【正上方】 ▼▼▼
-
-/* --- 【全新】情侣空间-情侣番茄钟功能核心函数 --- */
 
 /**
  * 打开番茄钟主页并渲染历史记录
@@ -2217,7 +2201,7 @@ async function showPomodoroHistoryDetail(sessionId) {
   const titleEl = document.getElementById('pomodoro-history-viewer-title');
   const contentEl = document.getElementById('pomodoro-history-viewer-content');
 
-  titleEl.textContent = `“${session.task}”的专注记录`;
+  titleEl.textContent = `"${session.task}"的专注记录`;
   contentEl.innerHTML = '';
 
   if (session.log && session.log.length > 0) {
@@ -2235,24 +2219,27 @@ async function showPomodoroHistoryDetail(sessionId) {
   modal.classList.add('visible');
 }
 
-// ▼▼▼ 用这个新函数替换旧的 openPomodoroSetup ▼▼▼
+/**
+ * 打开番茄钟设置弹窗
+ */
 function openPomodoroSetup() {
   document.getElementById('pomodoro-task-input').value = '';
   document.getElementById('pomodoro-duration-input').value = '25';
   document.getElementById('pomodoro-talk-interval-input').value = '5';
   document.getElementById('pomodoro-bg-url-input').value = '';
 
-  // 核心新增：每次打开时，清空上一次本地上传的临时数据
+  // 每次打开时，清空上一次本地上传的临时数据
   pomodoroState.tempBgDataUrl = null;
 
   document.getElementById('ls-pomodoro-setup-modal').classList.add('visible');
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
-// ▼▼▼ 用这个【支持正/倒计时】的新版本，替换旧的 startPomodoroSession 函数 ▼▼▼
+/**
+ * 开始番茄钟专注会话
+ */
 async function startPomodoroSession() {
   const task = document.getElementById('pomodoro-task-input').value.trim();
-  // 1. 获取用户选择的计时模式
+  // 获取用户选择的计时模式
   const timerType = document.querySelector('input[name="pomodoro-mode"]:checked').value;
   const durationMinutes = parseInt(document.getElementById('pomodoro-duration-input').value);
   const talkIntervalMinutes = parseInt(document.getElementById('pomodoro-talk-interval-input').value);
@@ -2262,21 +2249,21 @@ async function startPomodoroSession() {
     alert('请输入一个专注任务！');
     return;
   }
-  // 2. 如果是倒计时模式，才需要检查时长是否有效
+  // 如果是倒计时模式，才需要检查时长是否有效
   if (timerType === 'countdown' && (isNaN(durationMinutes) || durationMinutes < 1)) {
     alert('倒计时模式下，请输入有效的专注时长！');
     return;
   }
 
   const chat = state.chats[activeLoversSpaceCharId];
-  // 3. 根据模式，设置总时长（正计时模式总时长为0，因为它会一直增加）
+  // 根据模式，设置总时长（正计时模式总时长为0，因为它会一直增加）
   const durationSeconds = timerType === 'countdown' ? durationMinutes * 60 : 0;
 
   pomodoroState.currentSession = {
     chatId: activeLoversSpaceCharId,
     task: task,
     duration: durationSeconds,
-    timerType: timerType, // 4. 把计时模式也保存到会话记录里
+    timerType: timerType, // 把计时模式也保存到会话记录里
     startTime: Date.now(),
     log: [],
   };
@@ -2294,12 +2281,12 @@ async function startPomodoroSession() {
   document.getElementById('pomodoro-char-avatar').src = chat.settings.aiAvatar;
   document.getElementById('pomodoro-current-task').textContent = task;
 
-  // 5. 根据模式，设置计时器的初始值
+  // 根据模式，设置计时器的初始值
   let timeTracker = timerType === 'countdown' ? durationSeconds : 0;
   updatePomodoroTimerDisplay(timeTracker);
 
   pomodoroState.timerId = setInterval(() => {
-    // 6. 【核心修改】根据模式决定是增加还是减少时间
+    // 根据模式决定是增加还是减少时间
     if (timerType === 'countdown') {
       timeTracker--;
       if (timeTracker <= 0) {
@@ -2314,7 +2301,7 @@ async function startPomodoroSession() {
   }, 1000);
   if (talkIntervalMinutes > 0) {
     pomodoroState.periodicTalkTimerId = setInterval(() => {
-      // 【核心修改】现在它会调用API来生成话语
+      // 现在它会调用API来生成话语
       triggerPomodoroAIResponse('periodic_encouragement');
     }, talkIntervalMinutes * 60 * 1000);
   }
@@ -2323,14 +2310,13 @@ async function startPomodoroSession() {
 
   const hiddenMessage = {
     role: 'system',
-    content: `[系统指令：用户刚刚和你一起开始了一个番茄钟专注任务：“${task}”，时长为${durationMinutes}分钟。在专注期间，你可以通过 "pomodoro_talk" 指令来鼓励用户。]`,
+    content: `[系统指令：用户刚刚和你一起开始了一个番茄钟专注任务："${task}"，时长为${durationMinutes}分钟。在专注期间，你可以通过 "pomodoro_talk" 指令来鼓励用户。]`,
     timestamp: Date.now(),
     isHidden: true,
   };
   chat.history.push(hiddenMessage);
   await db.chats.put(chat);
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
  * 更新番茄钟的倒计时显示
@@ -2344,14 +2330,17 @@ function updatePomodoroTimerDisplay(secondsLeft) {
   ).padStart(2, '0')}`;
 }
 
-// ▼▼▼ 用这个【已修复时长记录】的新版本，替换旧的 endPomodoroSession 函数 ▼▼▼
+/**
+ * 结束番茄钟专注会话
+ * @param {boolean} isCompleted - 是否完成专注
+ */
 async function endPomodoroSession(isCompleted = false) {
   if (!pomodoroState.isActive) return;
 
   clearInterval(pomodoroState.timerId);
   clearInterval(pomodoroState.periodicTalkTimerId);
 
-  // 【核心修改】在保存前，根据计时模式重新计算并更新最终的专注时长
+  // 在保存前，根据计时模式重新计算并更新最终的专注时长
   if (pomodoroState.currentSession.timerType === 'countup') {
     // 对于正计时，时长是结束时间减去开始时间
     pomodoroState.currentSession.duration = Math.floor((Date.now() - pomodoroState.currentSession.startTime) / 1000);
@@ -2383,10 +2372,9 @@ async function endPomodoroSession(isCompleted = false) {
     showCustomAlert('专注结束', '你中断了本次专注。');
   }
 }
-// ▲▲▲ 替换结束 ▲▲▲
 
 /**
- * 【功能增强版】触发番茄钟期间的AI互动 (已加入用户人设并增加回复长度)
+ * 触发番茄钟期间的AI互动
  * @param {string} triggerType - 触发类型, 'user_click' 或 'periodic_encouragement'
  */
 async function triggerPomodoroAIResponse(triggerType) {
@@ -2399,7 +2387,6 @@ async function triggerPomodoroAIResponse(triggerType) {
     return;
   }
 
-  // --- 【核心修改1：加入了用户人设】 ---
   const elapsedSeconds = Math.floor((Date.now() - pomodoroState.currentSession.startTime) / 1000);
   const elapsedMinutes = Math.floor(elapsedSeconds / 60);
   const timeContext = `用户已经持续专注了 ${elapsedMinutes} 分钟。`;
@@ -2423,7 +2410,7 @@ async function triggerPomodoroAIResponse(triggerType) {
 
   const userMessage = {
     role: 'user',
-    content: `请根据你和我的角色人设，对我正在进行的“${pomodoroState.currentSession.task}”任务，说一段鼓励的话。`,
+    content: `请根据你和我的角色人设，对我正在进行的"${pomodoroState.currentSession.task}"任务，说一段鼓励的话。`,
   };
 
   try {
@@ -2496,9 +2483,9 @@ async function triggerPomodoroAIResponse(triggerType) {
     }, 10000);
   }
 }
-// ▼▼▼ 在这里粘贴下面的新代码 ▼▼▼
+
 /**
- * 【全新】发送情侣空间邀请
+ * 发送情侣空间邀请
  * @param {string} targetChatId - 被邀请的角色ID
  */
 async function sendLoversSpaceInvitation(targetChatId) {
@@ -2507,35 +2494,33 @@ async function sendLoversSpaceInvitation(targetChatId) {
 
   const myNickname = state.qzoneSettings.nickname || '我';
 
-  // 1. 创建对用户可见的“邀请卡片”消息
+  // 创建对用户可见的"邀请卡片"消息
   const visibleMessage = {
     role: 'user',
     senderName: myNickname,
     type: 'lovers_space_invitation',
-    content: `${myNickname} 对 ${chat.name} 发送了一个情侣空间邀请`, // <-- 就是在这里新增了这一行！
+    content: `${myNickname} 对 ${chat.name} 发送了一个情侣空间邀请`,
     timestamp: Date.now(),
     status: 'pending', // 状态：pending, accepted, rejected
   };
   chat.history.push(visibleMessage);
 
-  // 2. 创建对AI可见的“隐藏指令”消息
+  // 创建对AI可见的"隐藏指令"消息
   const hiddenMessage = {
     role: 'system',
-    content: `[系统指令：用户刚刚向你发起了“开启情侣空间”的邀请。请你根据人设，决定是否同意，并使用 'lovers_space_response' 指令回应。]`,
+    content: `[系统指令：用户刚刚向你发起了"开启情侣空间"的邀请。请你根据人设，决定是否同意，并使用 'lovers_space_response' 指令回应。]`,
     timestamp: Date.now() + 1,
     isHidden: true,
   };
   chat.history.push(hiddenMessage);
 
-  // 3. 保存并触发AI响应
+  // 保存并触发AI响应
   await db.chats.put(chat);
   triggerAiResponse();
 }
-// ▲▲▲ 粘贴结束 ▲▲▲
-// ▼▼▼ 在 init() 的【正上方】粘贴下面这一整块新代码 ▼▼▼
 
 /**
- * 【全新】处理用户对情侣空间邀请的回应
+ * 处理用户对情侣空间邀请的回应
  * @param {number} timestamp - 被回应的邀请消息的时间戳
  * @param {string} choice - 用户的选择, 'accepted' 或 'rejected'
  */
@@ -2546,10 +2531,10 @@ async function handleLoversSpaceResponse(timestamp, choice) {
   const invitationMsg = chat.history.find(m => m.timestamp === timestamp);
   if (!invitationMsg || invitationMsg.status !== 'pending') return;
 
-  // 1. 更新原始邀请卡片的状态
+  // 更新原始邀请卡片的状态
   invitationMsg.status = choice;
 
-  // 2. 根据用户的选择执行操作
+  // 根据用户的选择执行操作
   if (choice === 'accepted') {
     // 如果同意，就为这个角色创建情侣空间数据
     chat.loversSpaceData = {
@@ -2566,13 +2551,13 @@ async function handleLoversSpaceResponse(timestamp, choice) {
     const systemNotice = {
       role: 'system',
       type: 'pat_message',
-      content: `[系统：你和“${chat.name}”的情侣空间已成功开启！]`,
+      content: `[系统：你和"${chat.name}"的情侣空间已成功开启！]`,
       timestamp: Date.now(),
     };
     chat.history.push(systemNotice);
   }
 
-  // 3. 创建一条对用户隐藏，但对AI可见的系统指令，告诉AI你的决定
+  // 创建一条对用户隐藏，但对AI可见的系统指令，告诉AI你的决定
   const hiddenMessage = {
     role: 'system',
     content: `[系统指令：用户${choice === 'accepted' ? '同意了' : '拒绝了'}你开启情侣空间的邀请。]`,
@@ -2581,22 +2566,24 @@ async function handleLoversSpaceResponse(timestamp, choice) {
   };
   chat.history.push(hiddenMessage);
 
-  // 4. 保存所有更改到数据库
+  // 保存所有更改到数据库
   await db.chats.put(chat);
 
-  // 5. 刷新聊天界面，并触发AI的回应
+  // 刷新聊天界面，并触发AI的回应
   renderChatInterface(state.activeChatId);
   triggerAiResponse();
 }
+
+/**
+ * 初始化情侣空间功能
+ * 绑定所有相关事件监听器
+ */
 function initLoversSpace() {
-  // ▼▼▼ 第3步.3：在这里粘贴新代码 ▼▼▼
   document.getElementById('ls-change-bg-btn').addEventListener('click', handleChangeLoversSpaceBackground);
-  // ▲▲▲ 新代码粘贴结束 ▲▲▲
 
   // 绑定主屏幕App图标的点击事件
   document.getElementById('lovers-space-app-icon').addEventListener('click', openLoversSpaceEntry);
 
-  // ▼▼▼ 用这块代码替换 ▼▼▼
   document.getElementById('ls-char-selector-list').addEventListener('click', async e => {
     const item = e.target.closest('.chat-list-item');
     if (item && item.dataset.chatId) {
@@ -2606,7 +2593,7 @@ function initLoversSpace() {
       // 关闭选择弹窗
       document.getElementById('ls-char-selector-modal').classList.remove('visible');
 
-      // 【核心逻辑】判断情侣空间状态
+      // 判断情侣空间状态
       if (chat.loversSpaceData) {
         // 如果已开通，直接进入
         openLoversSpace(chatId);
@@ -2614,7 +2601,7 @@ function initLoversSpace() {
         // 如果未开通，弹窗确认是否发送邀请
         const confirmed = await showCustomConfirm(
           '邀请开启情侣空间',
-          `你和“${chat.name}”的情侣空间还未开启，要现在邀请Ta吗？`,
+          `你和"${chat.name}"的情侣空间还未开启，要现在邀请Ta吗？`,
         );
         if (confirmed) {
           // 如果用户确认，发送邀请并跳转到聊天界面
@@ -2624,25 +2611,23 @@ function initLoversSpace() {
       }
     }
   });
-  // ▲▲▲ 替换结束 ▲▲▲
 
   document.getElementById('ls-cancel-switch-char-btn').addEventListener('click', () => {
     document.getElementById('ls-char-selector-modal').classList.remove('visible');
   });
   document.getElementById('ls-switch-char-btn').addEventListener('click', openCharSelectorForLoversSpace);
 
-  // ▼▼▼ 用这块【修复后】的代码，完整替换旧的 'ls-tab-bar' 事件监听器 ▼▼▼
   // 绑定页签切换事件
   document.getElementById('ls-tab-bar').addEventListener('click', e => {
     const tab = e.target.closest('.ls-tab-item');
     if (tab && tab.dataset.view) {
       const viewId = tab.dataset.view;
-      // 1. 切换高亮和视图
+      // 切换高亮和视图
       document.querySelectorAll('.ls-tab-item').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       switchLoversSpaceTab(viewId);
 
-      // 2. 【核心修复】根据点击的页签，渲染对应的内容
+      // 根据点击的页签，渲染对应的内容
       const chat = state.chats[activeLoversSpaceCharId];
       if (!chat) return;
 
@@ -2653,30 +2638,26 @@ function initLoversSpace() {
       } else if (viewId === 'ls-letters-view') {
         renderLSLetters(chat.loversSpaceData.loveLetters, chat);
       } else if (viewId === 'ls-questions-view') {
-        // 这就是我们新增的逻辑！
         renderLSQuestions(chat.loversSpaceData.questions, chat);
       } else if (viewId === 'ls-diary-view') {
         const now = new Date();
         renderLSDiaryView(now.getFullYear(), now.getMonth() + 1);
       } else if (viewId === 'ls-shares-view') {
         renderLSShares(chat.loversSpaceData.shares, chat);
-      }
-      // ▼▼▼ 在这里添加下面这3行新代码 ▼▼▼
-      else if (viewId === 'ls-pomodoro-view') {
+      } else if (viewId === 'ls-pomodoro-view') {
         openPomodoroScreen();
       }
     }
   });
-  // ▲▲▲ 替换结束 ▲▲▲
 
-  // 绑定“说说”功能的按钮
+  // 绑定"说说"功能的按钮
   document.getElementById('ls-add-moment-btn').addEventListener('click', openMomentCreator);
   document.getElementById('ls-cancel-moment-btn').addEventListener('click', () => {
     document.getElementById('ls-create-moment-modal').classList.remove('visible');
   });
   document.getElementById('ls-confirm-moment-btn').addEventListener('click', handlePostMoment);
 
-  // 绑定“相册”功能的按钮
+  // 绑定"相册"功能的按钮
   document.getElementById('ls-add-album-btn').addEventListener('click', openAlbumCreator);
   document.getElementById('ls-select-photos-btn').addEventListener('click', () => {
     document.getElementById('ls-photo-input').click();
@@ -2689,14 +2670,11 @@ function initLoversSpace() {
   const lsTextImageModeBtn = document.getElementById('ls-switch-to-text-image-mode');
   const lsImageModeContent = document.getElementById('ls-image-mode-content');
   const lsTextImageModeContent = document.getElementById('ls-text-image-mode-content');
-  // ▼▼▼ 用这块【已修复】的代码，替换掉上面那段错误的代码 ▼▼▼
   lsImageModeBtn.addEventListener('click', () => {
     lsImageModeBtn.classList.add('active');
     lsTextImageModeBtn.classList.remove('active');
-    // 新增下面这两行，这才是关键！
     lsImageModeContent.classList.add('active');
     lsTextImageModeContent.classList.remove('active');
-    // 旧的样式控制也保留，确保万无一失
     lsImageModeContent.style.display = 'block';
     lsTextImageModeContent.style.display = 'none';
   });
@@ -2704,20 +2682,18 @@ function initLoversSpace() {
   lsTextImageModeBtn.addEventListener('click', () => {
     lsTextImageModeBtn.classList.add('active');
     lsImageModeBtn.classList.remove('active');
-    // 新增下面这两行，这才是关键！
     lsTextImageModeContent.classList.add('active');
     lsImageModeContent.classList.remove('active');
-    // 旧的样式控制也保留，确保万无一失
     lsTextImageModeContent.style.display = 'block';
     lsImageModeContent.style.display = 'none';
   });
-  // ▲▲▲ 替换结束 ▲▲▲
 
   document.getElementById('ls-cancel-album-btn').addEventListener('click', () => {
     document.getElementById('ls-create-album-modal').classList.remove('visible');
   });
   document.getElementById('ls-confirm-album-btn').addEventListener('click', handleConfirmAlbum);
-  // ▼▼▼ 【全新】情侣空间设置功能事件监听 ▼▼▼
+
+  // 情侣空间设置功能事件监听
   document.getElementById('ls-settings-btn').addEventListener('click', () => {
     const chat = state.chats[activeLoversSpaceCharId];
     if (chat && chat.loversSpaceData) {
@@ -2746,10 +2722,8 @@ function initLoversSpace() {
     document.getElementById('ls-settings-modal').classList.remove('visible');
     alert('纪念日已保存！');
   });
-  // ▲▲▲ 事件监听结束 ▲▲▲
-  // ▼▼▼ 把这段新代码粘贴到 init() 的事件监听器区域 ▼▼▼
 
-  // 【情侣空间相册】事件监听
+  // 情侣空间相册事件监听
   document.getElementById('ls-album-list').addEventListener('click', e => {
     const item = e.target.closest('.ls-album-item');
     if (!item) return;
@@ -2771,14 +2745,14 @@ function initLoversSpace() {
       }
     }
   });
-  // ▲▲▲ 事件监听结束 ▲▲▲
-  // ▼▼▼ 【全新】情侣空间说说互动功能事件监听 ▼▼▼
+
+  // 情侣空间说说互动功能事件监听
   document.getElementById('ls-moments-list').addEventListener('click', async e => {
     const target = e.target;
     const momentCard = target.closest('.ls-moment-card');
     if (!momentCard) return;
 
-    // 1. 【核心】从被点击的卡片上获取正确的索引
+    // 从被点击的卡片上获取正确的索引
     const momentIndex = parseInt(momentCard.dataset.momentIndex);
     const chat = state.chats[activeLoversSpaceCharId];
     // 安全检查，确保能找到对应的数据
@@ -2786,7 +2760,7 @@ function initLoversSpace() {
 
     const moment = chat.loversSpaceData.moments[momentIndex];
 
-    // --- 处理“发送评论”按钮 ---
+    // 处理"发送评论"按钮
     if (target.classList.contains('ls-comment-send-btn')) {
       const input = momentCard.querySelector('.ls-comment-input-area input');
       const commentText = input.value.trim();
@@ -2809,20 +2783,19 @@ function initLoversSpace() {
       renderLSMoments(chat.loversSpaceData.moments, chat); // 刷新界面
     }
 
-    // --- 2. 【核心】处理“删除说说”按钮 ---
+    // 处理"删除说说"按钮
     if (target.classList.contains('ls-moment-delete-btn')) {
       const confirmed = await showCustomConfirm('删除说说', '确定要删除这条说说吗？', {
         confirmButtonClass: 'btn-danger',
       });
       if (confirmed) {
-        // 2. 【核心】使用我们刚刚获取的、绝对正确的 momentIndex 来删除数组中的元素
         chat.loversSpaceData.moments.splice(momentIndex, 1);
         await db.chats.put(chat);
         renderLSMoments(chat.loversSpaceData.moments, chat);
       }
     }
 
-    // --- 3. 处理“删除评论”按钮 ---
+    // 处理"删除评论"按钮
     if (target.classList.contains('ls-comment-delete-btn')) {
       const commentIndex = parseInt(target.dataset.commentIndex);
       const confirmed = await showCustomConfirm('删除评论', '确定要删除这条评论吗？', {
@@ -2836,20 +2809,17 @@ function initLoversSpace() {
     }
   });
 
-  /* ▼▼▼ 把这一整块全新的事件监听器代码，粘贴到 // ▲▲▲ 情侣空间事件监听结束 ▲▲▲ 的正上方 ▼▼▼ */
+  // 情侣空间情书功能事件监听
 
-  // --- 【全新】情侣空间情书功能事件监听 ---
-
-  // 1. 绑定“写情书”的浮动按钮
+  // 绑定"写情书"的浮动按钮
   document.getElementById('ls-add-letter-btn').addEventListener('click', () => openLoveLetterEditor());
 
-  // 2. 绑定写信弹窗的“取消”和“寄出”按钮
+  // 绑定写信弹窗的"取消"和"寄出"按钮
   document.getElementById('ls-cancel-letter-btn').addEventListener('click', () => {
     document.getElementById('ls-create-letter-modal').classList.remove('visible');
   });
   document.getElementById('ls-confirm-letter-btn').addEventListener('click', handlePostLoveLetter);
 
-  // ▼▼▼ 用这块【功能更强大的】代码，完整替换旧的 ls-letters-list 事件监听器 ▼▼▼
   // 使用事件委托，为情书列表中的所有卡片和按钮绑定点击事件
   document.getElementById('ls-letters-list').addEventListener('click', async e => {
     const letterItem = e.target.closest('.ls-love-letter-item');
@@ -2861,7 +2831,7 @@ function initLoversSpace() {
       const chat = state.chats[activeLoversSpaceCharId];
       const letter = chat.loversSpaceData.loveLetters.find(l => l.id === letterId);
 
-      const confirmed = await showCustomConfirm('删除情书', `确定要删除这封写给“${letter.recipientName}”的情书吗？`, {
+      const confirmed = await showCustomConfirm('删除情书', `确定要删除这封写给"${letter.recipientName}"的情书吗？`, {
         confirmButtonClass: 'btn-danger',
       });
 
@@ -2877,12 +2847,8 @@ function initLoversSpace() {
       showLoveLetterDetail(letterItem.dataset.letterId);
     }
   });
-  // ▲▲▲ 替换结束 ▲▲▲
 
-  /* ▲▲▲ 新增事件监听结束 ▲▲▲ */
-  /* ▼▼▼ 把这段新代码粘贴到 // ▲▲▲ 情侣空间事件监听结束 ▲▲▲ 的正上方 ▼▼▼ */
-
-  // --- 【全新】情书查看器按钮事件监听 ---
+  // 情书查看器按钮事件监听
   document.getElementById('ls-close-letter-viewer-btn').addEventListener('click', () => {
     document.getElementById('ls-letter-viewer-modal').classList.remove('visible');
     activeLoveLetter = null; // 关闭时清理暂存的数据
@@ -2898,29 +2864,26 @@ function initLoversSpace() {
     activeLoveLetter = null; // 清理
   });
 
-  /* ▲▲▲ 新增代码粘贴结束 ▲▲▲ */
-  // ▼▼▼ 把这一整块全新的事件监听器代码，粘贴到 // ▲▲▲ 情侣空间事件监听结束 ▲▲▲ 的正上方 ▼▼▼
+  // 情侣空间-情侣提问功能事件监听
 
-  /* --- 【全新】情侣空间-情侣提问功能事件监听 --- */
-
-  // 1. 绑定“提问”的浮动按钮
+  // 绑定"提问"的浮动按钮
   document.getElementById('ls-add-question-btn').addEventListener('click', openQuestionAsker);
 
-  // 2. 绑定提问弹窗的按钮
+  // 绑定提问弹窗的按钮
   document.getElementById('ls-cancel-ask-btn').addEventListener('click', () => {
     document.getElementById('ls-ask-question-modal').classList.remove('visible');
   });
   document.getElementById('ls-confirm-ask-btn').addEventListener('click', handlePostQuestion);
 
-  // 3. 绑定回答弹窗的按钮
+  // 绑定回答弹窗的按钮
   document.getElementById('ls-cancel-answer-btn').addEventListener('click', () => {
     document.getElementById('ls-answer-question-modal').classList.remove('visible');
   });
   document.getElementById('ls-confirm-answer-btn').addEventListener('click', handlePostAnswer);
 
-  // 4. 使用事件委托，为所有“回答”和“删除”按钮绑定点击事件
+  // 使用事件委托，为所有"回答"和"删除"按钮绑定点击事件
   document.getElementById('ls-questions-list').addEventListener('click', e => {
-    // 这是你已有的处理“回答”按钮的逻辑
+    // 处理"回答"按钮的逻辑
     if (e.target.classList.contains('ls-answer-btn')) {
       const questionId = e.target.dataset.questionId;
       if (questionId) {
@@ -2928,21 +2891,18 @@ function initLoversSpace() {
       }
     }
 
-    // ▼▼▼ 这是我们新加的处理“删除”按钮的逻辑 ▼▼▼
+    // 处理"删除"按钮的逻辑
     if (e.target.classList.contains('ls-question-delete-btn')) {
       const questionId = e.target.dataset.questionId;
       if (questionId) {
         handleDeleteLSQuestion(questionId);
       }
     }
-    // ▲▲▲ 新增逻辑结束 ▲▲▲
   });
 
-  /* --- 情侣提问事件监听结束 --- */
+  // 情侣空间专属播放器事件监听器
 
-  // ▼▼▼ 【全新】情侣空间专属播放器事件监听器 ▼▼▼
-
-  // 1. 监听主播放器内的所有按钮
+  // 监听主播放器内的所有按钮
   document.getElementById('ls-close-player-btn').addEventListener('click', () => {
     document.getElementById('ls-music-player-overlay').classList.remove('visible');
   });
@@ -2954,7 +2914,7 @@ function initLoversSpace() {
   document.getElementById('ls-next-btn').addEventListener('click', playNextLSSong);
   document.getElementById('ls-prev-btn').addEventListener('click', playPrevLSSong);
 
-  // 2. 监听播放列表面板内的所有按钮
+  // 监听播放列表面板内的所有按钮
   document.getElementById('ls-close-playlist-btn').addEventListener('click', () => {
     document.getElementById('ls-music-playlist-panel').classList.remove('visible');
   });
@@ -2981,7 +2941,7 @@ function initLoversSpace() {
     }
   });
 
-  // 3. 监听音频播放器的状态
+  // 监听音频播放器的状态
   const lsAudioPlayer = document.getElementById('ls-audio-player');
   lsAudioPlayer.addEventListener('timeupdate', updateLSProgressBar);
   lsAudioPlayer.addEventListener('ended', playNextLSSong);
@@ -2994,7 +2954,7 @@ function initLoversSpace() {
     renderLSMusicPlayerUI();
   });
 
-  // 4. 监听进度条的点击
+  // 监听进度条的点击
   document.getElementById('ls-progress-bar').addEventListener('click', e => {
     if (!lsAudioPlayer.duration) return;
     const progressBar = e.currentTarget;
@@ -3003,7 +2963,7 @@ function initLoversSpace() {
     lsAudioPlayer.currentTime = (clickX / barWidth) * lsAudioPlayer.duration;
   });
 
-  // 5. 【核心】拦截情侣空间分享列表的点击事件，不再触发“一起听”
+  // 拦截情侣空间分享列表的点击事件，不再触发"一起听"
   document.getElementById('ls-shares-list').addEventListener('click', async e => {
     const item = e.target.closest('.ls-share-item');
     if (!item || !item.dataset.shareData) return;
@@ -3017,42 +2977,32 @@ function initLoversSpace() {
     // 其他类型的分享，保持原来的逻辑
     else if (shareData.shareType === 'movie' || shareData.shareType === 'book') {
       await showCustomAlert(`分享详情 - ${shareData.title}`, shareData.thoughts || shareData.summary || '暂无简介');
-    }
-    // ▼▼▼ 在这里粘贴下面这块【全新】的代码 ▼▼▼
-    else if (shareData.shareType === 'game') {
+    } else if (shareData.shareType === 'game') {
       // 为游戏分享卡片构建一个更详细的弹窗内容
-      const gameInfo = `游戏名：${shareData.title}\n\n简介：${shareData.summary || '暂无简介'}\n\nTa说：“${
+      const gameInfo = `游戏名：${shareData.title}\n\n简介：${shareData.summary || '暂无简介'}\n\nTa说："${
         shareData.thoughts || '一起玩吧！'
-      }”`;
+      }"`;
       await showCustomAlert(`分享的游戏`, gameInfo);
     }
   });
 
-  // ▲▲▲ 新增事件监听结束 ▲▲▲
-  // ▼▼▼ 在 init() 的事件监听器区域末尾，粘贴这段新代码 ▼▼▼
-
-  // 【全新】情侣空间播放器封面/歌词切换事件
+  // 情侣空间播放器封面/歌词切换事件
   document.getElementById('ls-display-area').addEventListener('click', () => {
     document.getElementById('ls-display-area').classList.toggle('show-lyrics');
   });
 
-  // ▲▲▲ 新代码粘贴结束 ▲▲▲
-  // ▼▼▼ 在 init() 函数的末尾，粘贴这整块新代码 ▼▼▼
+  // 情侣番茄钟事件监听器
 
-  // ▼▼▼ 把这一整块全新的代码，粘贴到 init(); 的正上方 ▼▼▼
-
-  /* --- 【全新】情侣番茄钟事件监听器 --- */
-
-  // 1. 绑定“开启新的专注时光”按钮
+  // 绑定"开启新的专注时光"按钮
   document.getElementById('ls-pomodoro-start-btn-container').addEventListener('click', openPomodoroSetup);
 
-  // 2. 绑定设置弹窗的按钮
+  // 绑定设置弹窗的按钮
   document.getElementById('pomodoro-cancel-setup-btn').addEventListener('click', () => {
     document.getElementById('ls-pomodoro-setup-modal').classList.remove('visible');
   });
   document.getElementById('pomodoro-confirm-setup-btn').addEventListener('click', startPomodoroSession);
 
-  // 3. 【核心】为我们新增的“本地上传”按钮绑定事件
+  // 为我们新增的"本地上传"按钮绑定事件
   document.getElementById('pomodoro-bg-local-upload-btn').addEventListener('click', () => {
     document.getElementById('pomodoro-bg-file-input').click();
   });
@@ -3068,20 +3018,20 @@ function initLoversSpace() {
     }
   });
 
-  // 4. 绑定计时器界面上的元素
+  // 绑定计时器界面上的元素
   document.getElementById('pomodoro-char-avatar').addEventListener('click', () => {
-    // 【核心修改】现在它会调用API来生成话语
     triggerPomodoroAIResponse('user_click');
   });
   document.getElementById('pomodoro-end-btn').addEventListener('click', () => {
     endPomodoroSession(false); // false表示是用户手动中断
   });
 
-  // 5. 绑定历史详情弹窗的关闭按钮
+  // 绑定历史详情弹窗的关闭按钮
   document.getElementById('pomodoro-close-history-viewer-btn').addEventListener('click', () => {
     document.getElementById('ls-pomodoro-history-viewer-modal').classList.remove('visible');
   });
-  // ▼▼▼ 【全新】这是为番茄钟计时模式新增的交互代码 ▼▼▼
+
+  // 为番茄钟计时模式新增的交互代码
   document.querySelector('#ls-pomodoro-setup-modal').addEventListener('change', e => {
     if (e.target.name === 'pomodoro-mode') {
       const durationGroup = document.getElementById('pomodoro-duration-input').parentElement;
@@ -3094,11 +3044,8 @@ function initLoversSpace() {
       }
     }
   });
-  // ▲▲▲ 新增代码结束 ▲▲▲
 
-  /* --- 番茄钟事件监听结束 --- */
-  // ▼▼▼ 在 init() 的事件监听器区域，粘贴这块新代码 ▼▼▼
-  // 【全新】处理情侣空间邀请卡片的点击事件
+  // 处理情侣空间邀请卡片的点击事件
   document.getElementById('chat-messages').addEventListener('click', async e => {
     const card = e.target.closest('.waimai-card');
     if (!card) return;
@@ -3109,13 +3056,12 @@ function initLoversSpace() {
 
     if (invitationMsg && invitationMsg.type === 'lovers_space_invitation' && invitationMsg.status === 'pending') {
       const choice = e.target.dataset.choice; // 'accepted' or 'rejected'
-      // ▼▼▼ 用这块【最终通知版】的代码，替换掉你旧的 if (choice) { ... } 代码块 ▼▼▼
       if (choice) {
-        // 1. 更新邀请卡片的状态
+        // 更新邀请卡片的状态
         invitationMsg.status = choice;
         const chat = state.chats[state.activeChatId];
 
-        // 2. 判断用户的选择
+        // 判断用户的选择
         if (choice === 'accepted') {
           // 如果同意，创建情侣空间数据
           chat.loversSpaceData = {
@@ -3129,16 +3075,16 @@ function initLoversSpace() {
             questions: [],
           };
 
-          // 创建对【用户可见】的系统通知
+          // 创建对用户可见的系统通知
           const visibleNotice = {
             role: 'system',
             type: 'pat_message',
-            content: `[系统：你和“${chat.name}”的情侣空间已成功开启！]`,
+            content: `[系统：你和"${chat.name}"的情侣空间已成功开启！]`,
             timestamp: Date.now(),
           };
           chat.history.push(visibleNotice);
 
-          // 创建给【AI看】的隐藏指令
+          // 创建给AI看的隐藏指令
           const hiddenMessage = {
             role: 'system',
             content: `[系统指令：用户同意了你开启情侣空间的邀请。]`,
@@ -3149,22 +3095,19 @@ function initLoversSpace() {
 
           await db.chats.put(chat);
           renderChatInterface(state.activeChatId);
-          // (这里没有 triggerAiResponse()，AI不会回应)
         } else {
           // 如果拒绝 (choice === 'rejected')
 
-          // --- ▼▼▼ 这就是我们为你新增的核心代码 ▼▼▼ ---
-
-          // a. 创建一条对【用户可见】的系统通知
+          // 创建一条对用户可见的系统通知
           const visibleNotice = {
             role: 'system',
             type: 'pat_message', // 复用灰色居中气泡样式
-            content: `[系统：你拒绝了“${chat.name}”的情侣空间邀请。]`,
+            content: `[系统：你拒绝了"${chat.name}"的情侣空间邀请。]`,
             timestamp: Date.now(),
           };
           chat.history.push(visibleNotice);
 
-          // b. 创建一条给【AI看】的隐藏指令，告诉它被拒绝了
+          // 创建一条给AI看的隐藏指令，告诉它被拒绝了
           const hiddenMessage = {
             role: 'system',
             content: `[系统指令：用户拒绝了你开启情侣空间的邀请。]`,
@@ -3173,24 +3116,17 @@ function initLoversSpace() {
           };
           chat.history.push(hiddenMessage);
 
-          // c. 保存所有更改到数据库
+          // 保存所有更改到数据库
           await db.chats.put(chat);
 
-          // d. 刷新聊天界面，让卡片状态和新的系统通知都显示出来
+          // 刷新聊天界面，让卡片状态和新的系统通知都显示出来
           renderChatInterface(state.activeChatId);
-
-          // (这里也没有 triggerAiResponse()，AI不会回应)
-
-          // --- ▲▲▲ 新增代码结束 ▲▲▲ ---
         }
       }
-      // ▲▲▲ 替换结束 ▲▲▲
     }
   });
-  // ▲▲▲ 粘贴结束 ▲▲▲
 
-  // ▼▼▼ 在 init() 的事件监听器区域末尾，粘贴这段新代码 ▼▼▼
-  // 【全新】处理情侣空间邀请卡片的点击事件
+  // 处理情侣空间邀请卡片的点击事件
   document.getElementById('chat-messages').addEventListener('click', async e => {
     // 寻找被点击的元素是否在邀请卡片内
     const card = e.target.closest('.waimai-card');
@@ -3210,10 +3146,8 @@ function initLoversSpace() {
       }
     }
   });
-  // ▲▲▲ 粘贴结束 ▲▲▲
-  // ▼▼▼ 在 init() 的事件监听器区域末尾，粘贴下面这整块新代码 ▼▼▼
 
-  /* --- 【全新】情侣空间-情绪日记事件监听 --- */
+  // 情侣空间-情绪日记事件监听
   document.getElementById('lovers-space-screen').addEventListener('click', e => {
     const chat = state.chats[activeLoversSpaceCharId];
     if (!chat) return;
@@ -3256,8 +3190,4 @@ function initLoversSpace() {
   document.getElementById('ls-close-diary-viewer-btn').addEventListener('click', () => {
     document.getElementById('ls-diary-viewer-modal').classList.remove('visible');
   });
-
-  /* --- 情绪日记事件监听结束 --- */
-  // ▲▲▲ 新代码粘贴结束 ▲▲▲
-  // ▲▲▲ 情侣空间事件监听结束 ▲▲▲
 }
